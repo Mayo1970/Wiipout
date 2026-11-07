@@ -99,6 +99,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 - Copyright: Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
 
 ```
+  Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
 
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal
@@ -136,7 +137,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 The game code derives from phoboslab/wipeout-rewrite, which has NO licence. README.md (lines 325-331) states:
 
-> # License
+> \# License
 > 
 > There is none. This code may or may not be based on the source code of the PC (ATI-Rage) version that was leaked in 2022. If it were, it would probably violate copyright law, but it may also fall under fair use ¯\\\_(ツ)\_/¯
 > 
