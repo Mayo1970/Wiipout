@@ -1,10 +1,24 @@
 CC ?= gcc
 EMCC ?= emcc
+PLATFORM ?= DESKTOP
 UNAME_S := $(shell uname -s)
 RENDERER ?= GL
 USE_GLX ?= false
 DEBUG ?= false
 USER_CFLAGS ?=
+
+WII_BUILD_DIR = build/wii
+WII_BUILD_OBJ = $(WII_BUILD_DIR)/obj
+WII_TARGET_ELF = $(WII_BUILD_DIR)/boot.elf
+WII_TARGET_DOL = $(WII_BUILD_DIR)/boot.dol
+WII_CC ?= $(DEVKITPRO)/devkitPPC/bin/powerpc-eabi-gcc
+WII_ELF2DOL ?= $(DEVKITPRO)/tools/bin/elf2dol
+
+ifeq ($(PLATFORM),WII)
+	.DEFAULT_GOAL := $(WII_TARGET_DOL)
+else
+	.DEFAULT_GOAL := sdl
+endif
 
 L_FLAGS ?= -lm
 C_FLAGS ?= -Isrc/libs/ -std=gnu99 -Wall -Wno-unused-variable $(USER_CFLAGS)
@@ -18,7 +32,10 @@ endif
 
 # Renderer ---------------------------------------------------------------------
 
-ifeq ($(RENDERER), GL)
+ifeq ($(PLATFORM),WII)
+	RENDERER_SRC = src/render_null.c
+	C_FLAGS := $(C_FLAGS) -DRENDERER_NULL
+else ifeq ($(RENDERER), GL)
 	RENDERER_SRC = src/render_gl.c
 	C_FLAGS := $(C_FLAGS) -DRENDERER_GL
 	L_FLAGS := $(L_FLAGS)
@@ -47,6 +64,7 @@ endif
 
 # macOS ------------------------------------------------------------------------
 
+ifneq ($(PLATFORM),WII)
 ifeq ($(UNAME_S), Darwin)
 	BREW_HOME := $(shell brew --prefix)
 	C_FLAGS := $(C_FLAGS) -x objective-c -I/opt/homebrew/include -D_THREAD_SAFE -w
@@ -100,6 +118,11 @@ else ifeq ($(OS), Windows_NT)
 
 else
 $(error Unknown environment)
+endif
+else
+	WII_ARCH_FLAGS = -mrvl -mcpu=750 -meabi -mhard-float
+	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS)
+	WII_L_FLAGS = -L$(DEVKITPRO)/libogc/lib/wii -lwiiuse -lbte -logc -lm
 endif
 
 
@@ -212,8 +235,35 @@ $(BUILD_DIR_WASM)/%.o: %.c
 -include $(COMMON_DEPS_WASM)
 
 
+# Targets Wii ------------------------------------------------------------------
+
+ifeq ($(PLATFORM),WII)
+WII_COMMON_OBJ = $(patsubst %.c,$(WII_BUILD_OBJ)/%.o,$(COMMON_SRC))
+WII_COMMON_DEPS = $(patsubst %.c,$(WII_BUILD_OBJ)/%.d,$(COMMON_SRC))
+WII_PLATFORM_OBJ = $(WII_BUILD_OBJ)/src/platform_wii.o
+
+$(WII_TARGET_DOL): $(WII_TARGET_ELF)
+	$(WII_ELF2DOL) $< $@
+
+$(WII_TARGET_ELF): $(WII_PLATFORM_OBJ) $(WII_COMMON_OBJ)
+	mkdir -p $(dir $@)
+	$(WII_CC) $(WII_ARCH_FLAGS) $^ -o $@ $(WII_L_FLAGS)
+
+$(WII_BUILD_OBJ)/%.o: %.c
+	mkdir -p $(dir $@)
+	$(WII_CC) $(C_FLAGS) -MMD -MP -c $< -o $@
+
+-include $(WII_COMMON_DEPS) $(WII_BUILD_OBJ)/src/platform_wii.d
+
+dist: $(WII_TARGET_DOL)
+	mkdir -p dist/apps/wiipeout
+	cp $(WII_TARGET_DOL) packaging/wii/meta.xml packaging/wii/icon.png dist/apps/wiipeout/
+
+.PHONY: dist
+endif
+
 
 
 .PHONY: clean
 clean:
-	$(RM) -rf $(BUILD_DIR) $(BUILD_DIR_WASM) $(WASM_RELEASE_DIR)
+	$(RM) -rf $(BUILD_DIR) $(BUILD_DIR_WASM) $(WASM_RELEASE_DIR) $(WII_BUILD_DIR)
