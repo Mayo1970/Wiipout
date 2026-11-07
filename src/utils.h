@@ -115,10 +115,10 @@ static inline uint16_t get_u16(uint8_t *bytes, uint32_t *p) {
 
 static inline uint32_t get_u32(uint8_t *bytes, uint32_t *p) {
 	uint32_t v = 0;
-	v |= bytes[(*p)++] << 24;
-	v |= bytes[(*p)++] << 16;
-	v |= bytes[(*p)++] <<  8;
-	v |= bytes[(*p)++] <<  0;
+	v |= (uint32_t)bytes[(*p)++] << 24;
+	v |= (uint32_t)bytes[(*p)++] << 16;
+	v |= (uint32_t)bytes[(*p)++] <<  8;
+	v |= (uint32_t)bytes[(*p)++] <<  0;
 	return v;
 }
 
@@ -131,10 +131,10 @@ static inline uint16_t get_u16_le(uint8_t *bytes, uint32_t *p) {
 
 static inline uint32_t get_u32_le(uint8_t *bytes, uint32_t *p) {
 	uint32_t v = 0;
-	v |= bytes[(*p)++] <<  0;
-	v |= bytes[(*p)++] <<  8;
-	v |= bytes[(*p)++] << 16;
-	v |= bytes[(*p)++] << 24;
+	v |= (uint32_t)bytes[(*p)++] <<  0;
+	v |= (uint32_t)bytes[(*p)++] <<  8;
+	v |= (uint32_t)bytes[(*p)++] << 16;
+	v |= (uint32_t)bytes[(*p)++] << 24;
 	return v;
 }
 

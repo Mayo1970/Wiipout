@@ -88,14 +88,14 @@ image_t *image_load_from_bytes(uint8_t *bytes, bool transparent) {
 	}
 	else if (type == TIM_TYPE_PALETTED_8_BPP) {
 		for (int i = 0; i < entries; i++) {
-			int32_t palette_pos = get_i16_le(bytes, &p);
+			uint16_t palette_pos = get_u16_le(bytes, &p);
 			image->pixels[pixel_pos++] = palette[(palette_pos >> 0) & 0xff];
 			image->pixels[pixel_pos++] = palette[(palette_pos >> 8) & 0xff];
 		}
 	}
 	else if (type == TIM_TYPE_PALETTED_4_BPP) {
 		for (int i = 0; i < entries; i++) {
-			int32_t palette_pos = get_i16_le(bytes, &p);
+			uint16_t palette_pos = get_u16_le(bytes, &p);
 			image->pixels[pixel_pos++] = palette[(palette_pos >>  0) & 0xf];
 			image->pixels[pixel_pos++] = palette[(palette_pos >>  4) & 0xf];
 			image->pixels[pixel_pos++] = palette[(palette_pos >>  8) & 0xf];
