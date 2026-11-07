@@ -1,0 +1,62 @@
+/wipeout.sublime-project
+/wipeout.sublime-workspace
+
+# Copyrighted game data, never commit
+/wipeout/*
+!/wipeout/game_data_goes_here.txt
+/wipeout2/
+/wipeout64/
+*.qoa
+*.mpeg
+*.mpg
+*.cmp
+*.tim
+*.prm
+*.trv
+*.trf
+*.trs
+*.ttf
+*.vb
+*.vh
+*.iso
+*.bin
+*.cue
+
+# Build output
+/build/
+/build_*/
+/dist/
+/sd/
+*.o
+*.d
+*.a
+*.elf
+*.dol
+*.map
+*.gch
+/wipegame
+/wipegame.exe
+
+# User data and logs
+/save.dat
+save.json
+*.log
+.DS_Store
+gamecontrollerdb.txt
+
+# Toolchain downloads
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.pkg.tar.*
+
+# Sprint plan and board (local only)
+/plan/
+
+# AI tooling
+.claude/
+CLAUDE.md
+AGENTS.md
+AGENTS.MD
+.codex/
+.agents/
