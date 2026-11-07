@@ -147,4 +147,4 @@ The game code derives from phoboslab/wipeout-rewrite, which has NO licence. READ
 
 Commercial release is not allowed.
 
-Decision pending (Matt): licence status must be resolved before this repository is made public.
+Decision (Matt, 2026-11-07): this repository has no licence, same as upstream. No commercial release.
