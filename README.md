@@ -284,6 +284,25 @@ Note that the blog post announcing this project may or may not provide a link to
 
 Optionally, if you want to use a game controller that may not be supported by SDL directly, you can place the [gamecontrollerdb.txt](https://github.com/gabomdq/SDL_GameControllerDB) in the root directory of this project (along the compiled `wipegame`). Note that if you want to use the analog sticks of your game controller in the game you have to configure it in the Options menu; the analog sticks are not bound by default.
 
+## Wii controls
+
+| Action | Wiimote sideways | Wiimote + Nunchuk | Classic Controller | GameCube pad |
+| --- | --- | --- | --- | --- |
+| Steer | D-pad left/right | Stick or D-pad left/right | Left stick or D-pad left/right | Main stick or D-pad left/right |
+| Pitch | D-pad up/down | Stick or D-pad up/down | Left stick or D-pad up/down | Main stick or D-pad up/down |
+| Thrust | 2 | A | B (bottom) | A |
+| Brake left | A | Z | L | L |
+| Brake right | B | C | R | R |
+| Fire | 1 | B | Y (left) | B |
+| Change view | Minus | Minus | X (top) | Y |
+| Look | — | — | Right stick | C-stick |
+| Menu select | 2 | A | B (bottom) | A |
+| Menu back | 1 | B | Y (left) or A (right) | B or X |
+| Pause/start | Plus | Plus | Plus | Start |
+| Exit to Homebrew Channel | HOME | HOME | HOME | None |
+
+Stick steering is analog; the main stick is folded into the D-pad on Wii, so it steers without rebinding. Controls can be rebound in Options > Controls.
+
 # Porting
 
 For a new platform not covered by SDL, Sokol, or OpenGL, a starting point would be to run CMake with the dummy platform and renderer implementations, e.g. `-DDEV_BUILD=true -DRENDERER=NULL -DPLATFORM=NULL`. This should compile on most systems, run enough to load assets, then exit, all with just a basic C compiler and no dependencies.
