@@ -11,6 +11,13 @@
 #define FIFO_SIZE (256 * 1024)
 #define VERTEX_ARENA_SIZE (512 * 1024)
 #define NEAR_PLANE 16.0f
+// Render-side overscan inset in EFB pixels; the VI mode stays untouched.
+#ifndef WII_OVERSCAN_X
+#define WII_OVERSCAN_X 0
+#endif
+#ifndef WII_OVERSCAN_Y
+#define WII_OVERSCAN_Y 0
+#endif
 // GX names faces by screen winding after its Y flip, so GL back faces are GX front faces.
 #define GX_CULL_BACKFACE GX_CULL_FRONT
 
@@ -153,8 +160,8 @@ void render_init(vec2i_t size) {
 	memset(fifo, 0, FIFO_SIZE);
 	GX_Init(fifo, FIFO_SIZE);
 	GX_SetCopyClear((GXColor){0, 0, 0, 255}, GX_MAX_Z24);
-	GX_SetViewport(0, 0, mode->fbWidth, mode->efbHeight, 0, 1);
-	GX_SetScissor(0, 0, mode->fbWidth, mode->efbHeight);
+	GX_SetViewport(WII_OVERSCAN_X, WII_OVERSCAN_Y, mode->fbWidth - 2 * WII_OVERSCAN_X, mode->efbHeight - 2 * WII_OVERSCAN_Y, 0, 1);
+	GX_SetScissor(WII_OVERSCAN_X, WII_OVERSCAN_Y, mode->fbWidth - 2 * WII_OVERSCAN_X, mode->efbHeight - 2 * WII_OVERSCAN_Y);
 	f32 scale = GX_GetYScaleFactor(mode->efbHeight, mode->xfbHeight);
 	u32 lines = GX_SetDispCopyYScale(scale);
 	GX_SetDispCopySrc(0, 0, mode->fbWidth, mode->efbHeight);
