@@ -841,6 +841,69 @@ static game_scene_t scene_next = GAME_SCENE_NONE;
 static int global_textures_len = 0;
 static void *global_mem_mark = 0;
 
+static void save_write_highscores(cJSON *root) {
+	cJSON *classes = cJSON_CreateArray();
+	for (int race_class = 0; race_class < NUM_RACE_CLASSES; race_class++) {
+		cJSON *circuits = cJSON_CreateArray();
+		for (int circuit = 0; circuit < NUM_CIRCUITS; circuit++) {
+			cJSON *tabs = cJSON_CreateArray();
+			for (int tab = 0; tab < NUM_HIGHSCORE_TABS; tab++) {
+				highscores_t *hs = &save.highscores[race_class][circuit][tab];
+				cJSON *obj = cJSON_CreateObject();
+				cJSON_AddNumberToObject(obj, "lap_record", (double)hs->lap_record);
+				cJSON *entries = cJSON_CreateArray();
+				for (int e = 0; e < NUM_HIGHSCORES; e++) {
+					// Names are char[4] and may have no NUL, so copy at most 3 chars
+					char name[4] = {0};
+					memcpy(name, hs->entries[e].name, 3);
+					cJSON *entry = cJSON_CreateObject();
+					cJSON_AddStringToObject(entry, "name", name);
+					cJSON_AddNumberToObject(entry, "time", (double)hs->entries[e].time);
+					cJSON_AddItemToArray(entries, entry);
+				}
+				cJSON_AddItemToObject(obj, "entries", entries);
+				cJSON_AddItemToArray(tabs, obj);
+			}
+			cJSON_AddItemToArray(circuits, tabs);
+		}
+		cJSON_AddItemToArray(classes, circuits);
+	}
+	cJSON_AddItemToObject(root, "highscores", classes);
+}
+
+static void save_read_highscores(cJSON *root) {
+	cJSON *classes = cJSON_GetObjectItem(root, "highscores");
+	if (!cJSON_IsArray(classes)) return;
+	for (int race_class = 0; race_class < NUM_RACE_CLASSES; race_class++) {
+		cJSON *circuits = cJSON_GetArrayItem(classes, race_class);
+		if (!cJSON_IsArray(circuits)) continue;
+		for (int circuit = 0; circuit < NUM_CIRCUITS; circuit++) {
+			cJSON *tabs = cJSON_GetArrayItem(circuits, circuit);
+			if (!cJSON_IsArray(tabs)) continue;
+			for (int tab = 0; tab < NUM_HIGHSCORE_TABS; tab++) {
+				cJSON *obj = cJSON_GetArrayItem(tabs, tab);
+				if (!cJSON_IsObject(obj)) continue;
+				highscores_t *hs = &save.highscores[race_class][circuit][tab];
+				cJSON *lap_record = cJSON_GetObjectItem(obj, "lap_record");
+				if (cJSON_IsNumber(lap_record)) hs->lap_record = (float)lap_record->valuedouble;
+				cJSON *entries = cJSON_GetObjectItem(obj, "entries");
+				if (!cJSON_IsArray(entries)) continue;
+				for (int e = 0; e < NUM_HIGHSCORES; e++) {
+					cJSON *entry = cJSON_GetArrayItem(entries, e);
+					if (!cJSON_IsObject(entry)) continue;
+					cJSON *name = cJSON_GetObjectItem(entry, "name");
+					if (cJSON_IsString(name) && name->valuestring) {
+						strncpy(hs->entries[e].name, name->valuestring, 3);
+						hs->entries[e].name[3] = '\0';
+					}
+					cJSON *time_val = cJSON_GetObjectItem(entry, "time");
+					if (cJSON_IsNumber(time_val)) hs->entries[e].time = (float)time_val->valuedouble;
+				}
+			}
+		}
+	}
+}
+
 void game_init(void) {
 	error_if(!platform_asset_exists("wipeout/track01/"), "Wipeout game content missing. Check your wipeout/ directory.\n");
 	if (platform_asset_exists("wipeout2/track01/") || platform_asset_exists("wipeout64/track01/")) {
@@ -881,6 +944,9 @@ void game_init(void) {
 				if ((item = cJSON_GetObjectItem(settings, "screen_res"))) save.screen_res = item->valueint;
 				if ((item = cJSON_GetObjectItem(settings, "post_effect"))) save.post_effect = item->valueint;
 				if ((item = cJSON_GetObjectItem(settings, "analog_response"))) save.analog_response = item->valuedouble;
+				if ((item = cJSON_GetObjectItem(settings, "vibration_toggle")) && cJSON_IsBool(item)) save.vibration_toggle = item->valueint;
+				if ((item = cJSON_GetObjectItem(settings, "modern_camera")) && cJSON_IsBool(item)) save.modern_camera = item->valueint;
+				if ((item = cJSON_GetObjectItem(settings, "r_analog_response")) && cJSON_IsNumber(item)) save.r_analog_response = item->valuedouble;
 			}
 
 			cJSON *unlocks = cJSON_GetObjectItem(root, "unlocks");
@@ -905,6 +971,13 @@ void game_init(void) {
 					}
 				}
 			}
+
+			cJSON *hs_name = cJSON_GetObjectItem(root, "highscores_name");
+			if (cJSON_IsString(hs_name) && hs_name->valuestring) {
+				strncpy(save.highscores_name, hs_name->valuestring, 3);
+				save.highscores_name[3] = '\0';
+			}
+			save_read_highscores(root);
 
 			cJSON_Delete(root);
 		} else {
@@ -1061,6 +1134,9 @@ void game_update(void) {
 		cJSON_AddNumberToObject(settings, "screen_res", (double)save.screen_res);
 		cJSON_AddNumberToObject(settings, "post_effect", (double)save.post_effect);
 		cJSON_AddNumberToObject(settings, "analog_response", (double)save.analog_response);
+		cJSON_AddBoolToObject(settings, "vibration_toggle", save.vibration_toggle);
+		cJSON_AddBoolToObject(settings, "modern_camera", save.modern_camera);
+		cJSON_AddNumberToObject(settings, "r_analog_response", (double)save.r_analog_response);
 		cJSON_AddItemToObject(root, "settings", settings);
 
 		cJSON *unlocks = cJSON_CreateObject();
@@ -1083,6 +1159,11 @@ void game_update(void) {
 			}
 		}
 		cJSON_AddItemToObject(root, "controls", controls);
+
+		char hs_name[4] = {0};
+		memcpy(hs_name, save.highscores_name, 3);
+		cJSON_AddStringToObject(root, "highscores_name", hs_name);
+		save_write_highscores(root);
 
 		char *json_str = cJSON_Print(root);
 		if (json_str) {

@@ -69,4 +69,11 @@ if ! grep -q "SMOKE PASS" "$OUT/wiipeout.log"; then
 	echo "smoke: FAIL (no PASS line)"
 	exit 1
 fi
+if [ "${SMOKE_INTRO:-0}" != 1 ]; then
+	MSYS_NO_PATHCONV=1 docker exec "$CTR" mtype -i $IMG ::/apps/wiipeout/save.json > "$OUT/save.json" || true
+	if ! grep -q '"settings"' "$OUT/save.json" || ! grep -q '"highscores"' "$OUT/save.json"; then
+		echo "smoke: FAIL (no save.json)"
+		exit 1
+	fi
+fi
 echo "smoke: PASS"
