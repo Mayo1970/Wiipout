@@ -5,6 +5,8 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <stdint.h>
 #include <math.h>
 #include <malloc.h>
+#include <string.h>
+#include <asndlib.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -12,6 +14,7 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <sdcard/wiisd_io.h>
 #include <ogc/usbstorage.h>
 #include <ogc/conf.h>
+#include <ogc/cache.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
 #include <ogc/pad.h>
@@ -27,7 +30,6 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include "input.h"
 
 #ifdef WII_SMOKE
-#include <string.h>
 #include "wipeout/game.h"
 #include "wipeout/ship.h"
 #include "wipeout/ship_ai.h"
@@ -54,6 +56,74 @@ static const devoptab_t *console_stdout;
 static const devoptab_t *console_stderr;
 static devoptab_t log_stdout;
 static devoptab_t log_stderr;
+
+#define AUDIO_VOICE 0
+#define AUDIO_RATE 44100
+#define AUDIO_RING_FRAMES 8192
+#define AUDIO_LEAD_FRAMES 3072
+#define AUDIO_CHUNK_FRAMES 512
+#define AUDIO_RING_BYTES (AUDIO_RING_FRAMES * 2 * sizeof(int16_t))
+
+static int16_t *audio_ring;
+static float audio_scratch[AUDIO_CHUNK_FRAMES * 2];
+static void (*audio_mix_cb)(float *buffer, uint32_t len);
+static bool audio_ready;
+static bool audio_voice_started;
+static u32 audio_last_ticks;
+static u64 audio_ticks;
+static u64 audio_write_frame;
+
+static void platform_audio_init(void) {
+	ASND_Init();
+	ASND_Pause(0);
+	audio_ready = true;
+	audio_ring = memalign(32, AUDIO_RING_BYTES);
+	if (!audio_ring) return;
+	memset(audio_ring, 0, AUDIO_RING_BYTES);
+	DCFlushRange(audio_ring, AUDIO_RING_BYTES);
+	if (ASND_SetInfiniteVoice(AUDIO_VOICE, VOICE_STEREO_16BIT, AUDIO_RATE, 0,
+		audio_ring, AUDIO_RING_BYTES, 255, 255) == SND_OK) {
+		audio_voice_started = true;
+	}
+}
+
+static void platform_audio_update(void) {
+	if (!audio_voice_started) return;
+	u32 ticks = ASND_GetTickCounterVoice(AUDIO_VOICE);
+	audio_ticks += (u32)(ticks - audio_last_ticks);
+	audio_last_ticks = ticks;
+	u64 play_frame = audio_ticks * AUDIO_RATE / 48000;
+	if (audio_write_frame < play_frame || audio_write_frame > play_frame + AUDIO_RING_FRAMES) {
+		// Discard stale audio after a missed deadline or a long loading stall.
+		memset(audio_ring, 0, AUDIO_RING_BYTES);
+		DCFlushRange(audio_ring, AUDIO_RING_BYTES);
+		audio_write_frame = play_frame + AUDIO_LEAD_FRAMES;
+	}
+	u64 target = play_frame + AUDIO_LEAD_FRAMES;
+	while (audio_write_frame < target) {
+		u32 frames = target - audio_write_frame > AUDIO_CHUNK_FRAMES ? AUDIO_CHUNK_FRAMES : (u32)(target - audio_write_frame);
+		u32 offset = (u32)audio_write_frame & (AUDIO_RING_FRAMES - 1);
+		if (frames > AUDIO_RING_FRAMES - offset) frames = AUDIO_RING_FRAMES - offset;
+		if (audio_mix_cb) audio_mix_cb(audio_scratch, frames * 2);
+		else memset(audio_scratch, 0, frames * 2 * sizeof(float));
+		for (u32 i = 0; i < frames * 2; i++) {
+			float sample = fmaxf(-1.0f, fminf(audio_scratch[i], 1.0f));
+			audio_ring[offset * 2 + i] = (int16_t)(sample * 32767.0f);
+		}
+		audio_write_frame += frames;
+	}
+	DCFlushRange(audio_ring, AUDIO_RING_BYTES);
+}
+
+static void platform_audio_shutdown(void) {
+	if (!audio_ready) return;
+	ASND_StopVoice(AUDIO_VOICE);
+	ASND_End();
+	free(audio_ring);
+	audio_ring = NULL;
+	audio_voice_started = false;
+	audio_ready = false;
+}
 
 #ifdef WII_SMOKE
 static u32 smoke_frame;
@@ -322,6 +392,7 @@ static void platform_prepare_frame(void) {
 }
 
 static void platform_end_frame(void) {
+	platform_audio_update();
 #if defined(RENDERER_NULL)
 	VIDEO_WaitVSync();
 #endif
@@ -362,7 +433,7 @@ void platform_set_fullscreen(bool fullscreen) {
 }
 
 void platform_set_audio_mix_cb(void (*cb)(float *buffer, uint32_t len)) {
-	(void)cb;
+	audio_mix_cb = cb;
 }
 
 static char *platform_path(const char *root, const char *name) {
@@ -464,6 +535,7 @@ int main(int argc, char *argv[]) {
 	WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
 	SYS_SetPowerCallback(platform_power_callback);
 	SYS_SetResetCallback(platform_reset_callback);
+	platform_audio_init();
 
 	bool sd_mounted = dvmProbeMountDiscIface("sd", &__io_wiisd, 4, 64);
 	platform_log_init(sd_mounted);
@@ -491,6 +563,7 @@ int main(int argc, char *argv[]) {
 			VIDEO_WaitVSync();
 		}
 		platform_rumble_off();
+		platform_audio_shutdown();
 		platform_log_close();
 		if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 		exit(0);
@@ -525,6 +598,7 @@ int main(int argc, char *argv[]) {
 		system_cleanup();
 	}
 	platform_rumble_off();
+	platform_audio_shutdown();
 	platform_log_close();
 	if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 	exit(0);
