@@ -10,6 +10,7 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <dvm.h>
 #include <sdcard/wiisd_io.h>
 #include <ogc/usbstorage.h>
+#include <ogc/conf.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
 #include <ogc/system.h>
@@ -28,6 +29,7 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #endif
 
 static GXRModeObj *video_mode;
+static bool video_widescreen;
 static void *video_xfb[2];
 static bool console_detached;
 static char *path_assets = "";
@@ -75,6 +77,10 @@ GXRModeObj *platform_wii_video_mode(void) {
 
 void *platform_wii_xfb(int index) {
 	return video_xfb[index];
+}
+
+bool platform_wii_widescreen(void) {
+	return video_widescreen;
 }
 
 void platform_wii_console_detach(void) {
@@ -178,7 +184,10 @@ void platform_exit(void) {
 }
 
 vec2i_t platform_screen_size(void) {
-	return video_mode ? vec2i(video_mode->fbWidth, video_mode->efbHeight) : vec2i(640, 480);
+	if (!video_mode) return vec2i(640, 480);
+	int h = video_mode->efbHeight;
+	int w = video_widescreen ? (h * 16 + 9 / 2) / 9 : (h * 4 + 3 / 2) / 3;
+	return vec2i(w, h);
 }
 
 double platform_now(void) {
@@ -239,6 +248,7 @@ uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
 static void platform_video_init(void) {
 	VIDEO_Init();
 	video_mode = VIDEO_GetPreferredMode(NULL);
+	video_widescreen = CONF_GetAspectRatio() == CONF_ASPECT_16_9;
 	video_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
 	video_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
 	console_init(video_xfb[0], 20, 20, video_mode->fbWidth, video_mode->xfbHeight, video_mode->fbWidth * VI_DISPLAY_PIX_SZ);
@@ -334,8 +344,12 @@ int main(int argc, char *argv[]) {
 #else
 	path_userdata = (char *)data_root;
 #endif
-	printf("Wiipeout: data %s, video %ux%u\n", data_root ? data_root : path_assets,
-		(unsigned int)video_mode->fbWidth, (unsigned int)video_mode->efbHeight);
+	vec2i_t logical = platform_screen_size();
+	printf("Wiipeout: data %s, efb %ux%u, logical %dx%d, tv %u %s, %s\n", data_root ? data_root : path_assets,
+		(unsigned int)video_mode->fbWidth, (unsigned int)video_mode->efbHeight, logical.x, logical.y,
+		(unsigned int)VIDEO_GetCurrentTvMode(),
+		(video_mode->viTVMode & VI_NON_INTERLACE) ? "progressive" : "interlaced",
+		video_widescreen ? "16:9" : "4:3");
 	platform_wii_mem_log("boot");
 	if (!wants_to_exit && !power_requested && !reset_requested) {
 		system_init();
