@@ -54,25 +54,6 @@ static volatile bool reset_requested;
 static float rumble_strength;
 static float rumble_acc;
 static bool rumble_on;
-
-// libogc's default speaker config (0x07D0) plays 4-bit ADPCM at 12 MHz / 2000 = 6000 Hz.
-#define WIIMOTE_SPEAKER_RATE 6000
-#define WIIMOTE_SPEAKER_SAMPLES_PER_PACKET 40
-#define WIIMOTE_SPEAKER_PACKET_BYTES 20
-#define WIIMOTE_SPEAKER_MAX_BYTES 4096
-#define WIIMOTE_SPEAKER_RETRY_FRAMES 30
-
-static uint8_t wiimote_speaker_data[WIIMOTE_SPEAKER_MAX_BYTES];
-static uint32_t wiimote_speaker_data_len;
-static const int16_t *wiimote_speaker_source;
-static uint32_t wiimote_speaker_source_len;
-static uint32_t wiimote_speaker_source_rate;
-static bool wiimote_speaker_encoded;
-static bool wiimote_speaker_connected;
-static bool wiimote_speaker_on;
-static bool wiimote_speaker_pending;
-static uint32_t wiimote_speaker_retry;
-
 static u64 start_tick;
 static FILE *log_file;
 static bool log_writing;
@@ -395,92 +376,6 @@ static void platform_rumble_off(void) {
 	rumble_on = false;
 }
 
-static void platform_wiimote_speaker_encode(const int16_t *samples, uint32_t len, uint32_t rate) {
-	if (wiimote_speaker_encoded && samples == wiimote_speaker_source &&
-		len == wiimote_speaker_source_len && rate == wiimote_speaker_source_rate) {
-		return;
-	}
-
-	uint32_t out_len = (uint32_t)(((uint64_t)len * WIIMOTE_SPEAKER_RATE) / rate);
-	uint32_t chunks = (out_len + WIIMOTE_SPEAKER_SAMPLES_PER_PACKET - 1) / WIIMOTE_SPEAKER_SAMPLES_PER_PACKET;
-	uint32_t max_chunks = sizeof(wiimote_speaker_data) / WIIMOTE_SPEAKER_PACKET_BYTES;
-	if (chunks > max_chunks) chunks = max_chunks;
-
-	uint32_t step = (uint32_t)(((uint64_t)rate << 16) / WIIMOTE_SPEAKER_RATE);
-	uint64_t pos = 0;
-	int16_t pcm[WIIMOTE_SPEAKER_SAMPLES_PER_PACKET];
-	WPADEncStatus enc;
-	memset(&enc, 0, sizeof(enc));
-
-	for (uint32_t c = 0; c < chunks; c++) {
-		for (uint32_t i = 0; i < WIIMOTE_SPEAKER_SAMPLES_PER_PACKET; i++) {
-			uint32_t out_index = c * WIIMOTE_SPEAKER_SAMPLES_PER_PACKET + i;
-			if (out_index >= out_len) {
-				pcm[i] = 0;
-				continue;
-			}
-			uint32_t index = (uint32_t)(pos >> 16);
-			uint32_t frac = (uint32_t)(pos & 0xffff);
-			int32_t s0 = index < len ? samples[index] : 0;
-			int32_t s1 = index + 1 < len ? samples[index + 1] : s0;
-			pcm[i] = (int16_t)(s0 + (((s1 - s0) * (int32_t)frac) >> 16));
-			pos += step;
-		}
-		WPAD_EncodeData(&enc, c == 0 ? WPAD_ENC_FIRST : WPAD_ENC_CONT, pcm,
-			WIIMOTE_SPEAKER_SAMPLES_PER_PACKET, &wiimote_speaker_data[c * WIIMOTE_SPEAKER_PACKET_BYTES]);
-	}
-
-	wiimote_speaker_data_len = chunks * WIIMOTE_SPEAKER_PACKET_BYTES;
-	wiimote_speaker_source = samples;
-	wiimote_speaker_source_len = len;
-	wiimote_speaker_source_rate = rate;
-	wiimote_speaker_encoded = true;
-}
-
-static void platform_wiimote_speaker_start(void) {
-	if (!wiimote_speaker_on || !wiimote_speaker_data_len) return;
-	wiimote_speaker_pending = false;
-	// libogc streams this buffer as 20-byte packets at the speaker rate.
-	WPAD_SendStreamData(WPAD_CHAN_0, wiimote_speaker_data, wiimote_speaker_data_len);
-}
-
-void platform_wiimote_speaker_play(const int16_t *samples, uint32_t len, uint32_t rate) {
-	if (!samples || !len || !rate) return;
-	platform_wiimote_speaker_encode(samples, len, rate);
-	if (!wiimote_speaker_data_len) return;
-	wiimote_speaker_pending = true;
-	if (wiimote_speaker_on) platform_wiimote_speaker_start();
-}
-
-static void platform_wiimote_speaker_update(bool connected) {
-	if (connected) {
-		if (!wiimote_speaker_connected) {
-			wiimote_speaker_connected = true;
-			wiimote_speaker_on = false;
-			wiimote_speaker_retry = 0;
-		}
-		if (!wiimote_speaker_on) {
-			if (wiimote_speaker_retry == 0) {
-				WPAD_ControlSpeaker(WPAD_CHAN_0, 1);
-				wiimote_speaker_retry = WIIMOTE_SPEAKER_RETRY_FRAMES;
-			}
-			else {
-				wiimote_speaker_retry--;
-			}
-			if (WPAD_IsSpeakerEnabled(WPAD_CHAN_0) == WPAD_ERR_NONE) {
-				wiimote_speaker_on = true;
-			}
-		}
-	}
-	else {
-		wiimote_speaker_connected = false;
-		wiimote_speaker_on = false;
-		wiimote_speaker_pending = false;
-		wiimote_speaker_retry = 0;
-	}
-	if (wiimote_speaker_on && wiimote_speaker_pending) platform_wiimote_speaker_start();
-}
-
 static void platform_pump_events(void) {
 	static float last[WII_PAD_COUNT];
 	static bool cc_format_sent;
@@ -490,7 +385,6 @@ static void platform_pump_events(void) {
 	PAD_ScanPads();
 	WPADData *data = WPAD_Data(WPAD_CHAN_0);
 	bool connected = WPAD_Probe(WPAD_CHAN_0, &type) == WPAD_ERR_NONE && data && data->err == WPAD_ERR_NONE;
-	platform_wiimote_speaker_update(connected);
 	if (connected && type == WPAD_EXP_CLASSIC) {
 		if (!cc_format_sent) {
 			// Retry the format after the Classic Controller handshake completes.
