@@ -56,6 +56,10 @@ static const devoptab_t *console_stdout;
 static const devoptab_t *console_stderr;
 static devoptab_t log_stdout;
 static devoptab_t log_stderr;
+static uint8_t *music_buffer;
+
+// One whole QOA track (about 35 KB per second of stereo audio).
+#define WII_MUSIC_BYTES (16 * 1024 * 1024)
 
 #define AUDIO_VOICE 0
 #define AUDIO_RATE 44100
@@ -524,6 +528,23 @@ FILE *platform_open_asset(const char *name, const char *mode) {
 	return file;
 }
 
+FILE *platform_wii_music_load(FILE *file) {
+	if (!music_buffer || fseek(file, 0, SEEK_END) != 0) return file;
+	long size = ftell(file);
+	if (size <= 0 || size > WII_MUSIC_BYTES || fseek(file, 0, SEEK_SET) != 0) {
+		printf("music: %ld bytes, streaming from storage\n", size);
+		fseek(file, 0, SEEK_SET);
+		return file;
+	}
+	size_t read = fread(music_buffer, 1, size, file);
+	fclose(file);
+	if (read != (size_t)size) {
+		printf("music: short read %u of %ld bytes\n", (unsigned int)read, size);
+		return NULL;
+	}
+	return fmemopen(music_buffer, size, "rb");
+}
+
 uint8_t *platform_load_asset(const char *name, uint32_t *bytes_read) {
 	uint8_t *bytes = file_load(platform_path(path_assets, name), bytes_read);
 	platform_wii_log_sync();
@@ -650,7 +671,14 @@ int main(int argc, char *argv[]) {
 		printf("ERROR: MEM2 arena is too small for the 16 MB hunk.\n");
 		while (true) VIDEO_WaitVSync();
 	}
-	SYS_SetArena2Hi((void *)base);
+	uintptr_t music_base = base >= WII_MUSIC_BYTES ? (base - WII_MUSIC_BYTES) & ~(uintptr_t)31 : 0;
+	if (music_base >= lo && music_base != 0) {
+		music_buffer = (uint8_t *)music_base;
+		SYS_SetArena2Hi((void *)music_base);
+	}
+	else {
+		SYS_SetArena2Hi((void *)base);
+	}
 	mem_init((void *)base);
 	(void)argc;
 	(void)argv;
