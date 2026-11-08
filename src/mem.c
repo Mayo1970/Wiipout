@@ -3,9 +3,32 @@
 #include "mem.h"
 #include "utils.h"
 
+#ifdef PLATFORM_WII
+static uint8_t *hunk;
+#else
 static uint8_t hunk[MEM_HUNK_BYTES];
+#endif
 static uint32_t bump_len = 0;
 static uint32_t temp_len = 0;
+static uint32_t bump_peak, temp_peak, total_peak;
+
+void mem_init(void *base) {
+#ifdef PLATFORM_WII
+	hunk = base;
+#else
+	(void)base;
+#endif
+}
+
+void mem_get_stats(mem_stats_t *s) {
+	*s = (mem_stats_t){bump_len, temp_len, bump_peak, temp_peak, total_peak, MEM_HUNK_BYTES};
+}
+
+static void mem_update_peaks(void) {
+	if (bump_len > bump_peak) bump_peak = bump_len;
+	if (temp_len > temp_peak) temp_peak = temp_len;
+	if (bump_len + temp_len > total_peak) total_peak = bump_len + temp_len;
+}
 
 static uint32_t temp_objects[MEM_TEMP_OBJECTS_MAX] = {};
 static uint32_t temp_objects_len;
@@ -27,6 +50,7 @@ void *mem_bump(uint32_t size) {
 	error_if(bump_len + temp_len + size >= MEM_HUNK_BYTES, "Failed to allocate %d bytes in hunk mem", size);
 	uint8_t *p = &hunk[bump_len];
 	bump_len += size;
+	mem_update_peaks();
 	memset(p, 0, size);
 	return p;
 }
@@ -52,6 +76,7 @@ void *mem_temp_alloc(uint32_t size) {
 	error_if(temp_objects_len >= MEM_TEMP_OBJECTS_MAX, "MEM_TEMP_OBJECTS_MAX reached");
 
 	temp_len += size;
+	mem_update_peaks();
 	void *p = &hunk[MEM_HUNK_BYTES - temp_len];
 	temp_objects[temp_objects_len++] = temp_len;
 	return p;

@@ -121,7 +121,7 @@ $(error Unknown environment)
 endif
 else
 	WII_ARCH_FLAGS = -mrvl -mcpu=750 -meabi -mhard-float
-	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS)
+	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS) -DPLATFORM_WII
 	WII_L_FLAGS = -L$(DEVKITPRO)/libogc/lib/wii -lwiiuse -lbte -logc -lm
 endif
 

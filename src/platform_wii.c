@@ -1,3 +1,9 @@
+#define WII_MAIN_STACK_BYTES (256 * 1024)
+static unsigned char stack[WII_MAIN_STACK_BYTES] __attribute__((aligned(8)));
+void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
+
+#include <stdint.h>
+#include <malloc.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
 #include <ogc/system.h>
@@ -5,6 +11,8 @@
 #include <wiiuse/wpad.h>
 
 #include "platform.h"
+#include "platform_wii.h"
+#include "mem.h"
 #include "utils.h"
 
 static GXRModeObj *video_mode;
@@ -82,7 +90,31 @@ static void platform_video_init(void) {
 	}
 }
 
+void platform_wii_mem_log(const char *tag) {
+	mem_stats_t s;
+	mem_get_stats(&s);
+	unsigned long mem1 = (uintptr_t)SYS_GetArena1Hi() - (uintptr_t)SYS_GetArena1Lo();
+	unsigned long mem2 = (uintptr_t)SYS_GetArena2Hi() - (uintptr_t)SYS_GetArena2Lo();
+	unsigned long heap = mallinfo().fordblks;
+	static unsigned long low = ~0UL;
+	if (mem1 + heap < low) low = mem1 + heap;
+	printf("mem %s: bump=%lu temp=%lu bump_peak=%lu temp_peak=%lu total_peak=%lu hunk=%lu heap_free=%lu mem1_arena=%lu mem2_arena=%lu free_low=%lu\n",
+		tag, (unsigned long)s.bump, (unsigned long)s.temp, (unsigned long)s.bump_peak,
+		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
+		heap, mem1, mem2, low);
+}
+
 int main(int argc, char *argv[]) {
+	uintptr_t hi = (uintptr_t)SYS_GetArena2Hi();
+	uintptr_t lo = (uintptr_t)SYS_GetArena2Lo();
+	uintptr_t base = hi >= MEM_HUNK_BYTES ? (hi - MEM_HUNK_BYTES) & ~(uintptr_t)31 : 0;
+	if (base < lo || base == 0) {
+		platform_video_init();
+		printf("ERROR: MEM2 arena is too small for the 16 MB hunk.\n");
+		while (true) VIDEO_WaitVSync();
+	}
+	SYS_SetArena2Hi((void *)base);
+	mem_init((void *)base);
 	(void)argc;
 	(void)argv;
 
@@ -94,6 +126,7 @@ int main(int argc, char *argv[]) {
 	#endif
 
 	platform_video_init();
+	platform_wii_mem_log("boot");
 	printf("Wiipeout platform stub is running. Press HOME to return to the Homebrew Channel.\n");
 
 	while (true) {

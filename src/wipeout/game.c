@@ -1,6 +1,9 @@
 #include <string.h>
 
 #include "../mem.h"
+#ifdef PLATFORM_WII
+#include "../platform_wii.h"
+#endif
 #include "../utils.h"
 #include "../system.h"
 #include "../platform.h"
@@ -1020,6 +1023,11 @@ void game_update(void) {
 
 		if (scene_current != GAME_SCENE_NONE) {
 			game_scenes[scene_current].init();
+#ifdef PLATFORM_WII
+			platform_wii_mem_log(scene_current == GAME_SCENE_MAIN_MENU ? "menu" :
+				scene_current == GAME_SCENE_RACE ? "race" :
+				scene_current == GAME_SCENE_INTRO ? "intro" : "title");
+#endif
 		}
 	}
 
