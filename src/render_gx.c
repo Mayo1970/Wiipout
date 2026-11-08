@@ -56,7 +56,12 @@ static void render_flush(void) {
 	uint32_t color_bytes = (count * sizeof(rgba_t) + 31) & ~31u;
 	uint32_t uv_bytes = (count * sizeof(vec2_t) + 31) & ~31u;
 	uint32_t bytes = pos_bytes + color_bytes + uv_bytes;
-	if (vertex_arena_used + bytes > VERTEX_ARENA_SIZE) { GX_DrawDone(); vertex_arena_used = 0; }
+	if (vertex_arena_used + bytes > VERTEX_ARENA_SIZE) {
+		WII_DIAG_PHASE(WII_PHASE_FLUSH_WAIT);
+		GX_DrawDone();
+		WII_DIAG_PHASE(WII_PHASE_UPDATE);
+		vertex_arena_used = 0;
+	}
 	u8 *slice = vertex_arena + vertex_arena_used;
 	vertex_arena_used += bytes;
 	vec3_t *positions = (vec3_t *)slice;
@@ -235,10 +240,14 @@ void render_frame_end(void) {
 	render_flush();
 	GX_SetZMode(GX_TRUE, GX_ALWAYS, GX_TRUE);
 	GX_SetColorUpdate(GX_TRUE);
+	WII_DIAG_PHASE(WII_PHASE_FRAME_COPY);
 	GX_CopyDisp(platform_wii_xfb(back), GX_TRUE);
+	WII_DIAG_PHASE(WII_PHASE_FRAME_WAIT);
 	GX_DrawDone();
+	WII_DIAG_PHASE(WII_PHASE_FRAME_FLIP);
 	VIDEO_SetNextFramebuffer(platform_wii_xfb(back));
 	VIDEO_Flush();
+	WII_DIAG_PHASE(WII_PHASE_UPDATE);
 	back ^= 1;
 	end_stats = running_stats;
 }
@@ -325,7 +334,9 @@ vec2i_t render_texture_size(uint16_t index) {
 void render_texture_replace_pixels(int16_t index, rgba_t *pixels) {
 	error_if(index < 0 || index >= textures_len || !pixels, "Invalid texture %d", index);
 	if (tris_len && batch_texture == index) render_flush();
+	WII_DIAG_PHASE(WII_PHASE_TEXTURE_WAIT);
 	GX_DrawDone();
+	WII_DIAG_PHASE(WII_PHASE_UPDATE);
 	encode_texture(&textures[index], pixels);
 }
 uint16_t render_textures_len(void) { return textures_len; }
