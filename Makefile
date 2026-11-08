@@ -15,8 +15,11 @@ WII_CC ?= $(DEVKITPRO)/devkitPPC/bin/powerpc-eabi-gcc
 WII_ELF2DOL ?= $(DEVKITPRO)/tools/bin/elf2dol
 WII_SMOKE ?= 0
 WII_SMOKE_INTRO ?= 0
+WII_SMOKE_FULL ?= 0
 ifeq ($(PLATFORM),WII)
-ifeq ($(WII_SMOKE_INTRO),1)
+ifeq ($(WII_SMOKE_FULL),1)
+WII_BUILD_DIR = build/wii-smoke-full
+else ifeq ($(WII_SMOKE_INTRO),1)
 WII_BUILD_DIR = build/wii-smoke-intro
 else
 ifeq ($(WII_SMOKE),1)
@@ -135,7 +138,9 @@ else
 	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS) -DPLATFORM_WII
 	WII_L_FLAGS = -L$(DEVKITPRO)/libogc/lib/wii -lwiiuse -lbte -lfat -lasnd -logc -lm
 
-ifeq ($(WII_SMOKE_INTRO),1)
+ifeq ($(WII_SMOKE_FULL),1)
+	C_FLAGS := $(C_FLAGS) -DWII_SMOKE -DWII_SMOKE_FULL
+else ifeq ($(WII_SMOKE_INTRO),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE -DWII_SMOKE_INTRO
 else ifeq ($(WII_SMOKE),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE

@@ -1,12 +1,16 @@
 #!/bin/sh
 # Boot the smoke build in Dolphin with an SD image that holds wipeout/, then check the SD log.
-# Usage: tools/dolphin_smoke/run.sh [path/to/Dolphin.exe]. SMOKE_INTRO=1 tests the intro, SMOKE_TIMEOUT sets seconds, SMOKE_DUMP=1 dumps PNGs.
+# Usage: tools/dolphin_smoke/run.sh [path/to/Dolphin.exe]. SMOKE_INTRO=1 tests the intro, SMOKE_FULL=1 intro to results, SMOKE_TIMEOUT sets seconds, SMOKE_DUMP=1 dumps PNGs.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DOLPHIN="${1:-${DOLPHIN:-Dolphin.exe}}"
-TIMEOUT="${SMOKE_TIMEOUT:-420}"
+if [ "${SMOKE_FULL:-0}" = 1 ]; then DEFAULT_TIMEOUT=900; else DEFAULT_TIMEOUT=420; fi
+TIMEOUT="${SMOKE_TIMEOUT:-$DEFAULT_TIMEOUT}"
 BUILD_DIR=build/wii-smoke
-if [ "${SMOKE_INTRO:-0}" = 1 ]; then
+if [ "${SMOKE_FULL:-0}" = 1 ]; then
+	BUILD_DIR=build/wii-smoke-full
+	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_FULL=1
+elif [ "${SMOKE_INTRO:-0}" = 1 ]; then
 	BUILD_DIR=build/wii-smoke-intro
 	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_INTRO=1
 else
