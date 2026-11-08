@@ -274,7 +274,7 @@ $(WII_BUILD_OBJ)/%.o: %.c
 -include $(WII_COMMON_DEPS) $(WII_BUILD_OBJ)/src/platform_wii.d
 
 dist: $(WII_TARGET_DOL)
-	mkdir -p dist/apps/wiipeout
+	mkdir -p dist/apps/wiipeout/wipeout
 	cp $(WII_TARGET_DOL) packaging/wii/meta.xml packaging/wii/icon.png dist/apps/wiipeout/
 
 .PHONY: dist
