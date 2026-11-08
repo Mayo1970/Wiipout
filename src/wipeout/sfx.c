@@ -5,6 +5,10 @@
 #include "sfx.h"
 #include "game.h"
 
+#ifdef PLATFORM_WII
+#include "../platform_wii.h"
+#endif
+
 #define QOA_IMPLEMENTATION
 #define QOA_NO_STDIO
 #include <qoa.h>
@@ -258,6 +262,13 @@ void sfx_music_open(char *path) {
 	if (!file) {
 		return;
 	}
+#ifdef PLATFORM_WII
+	// SD reads can stall on hardware mid-race, so play the whole track from MEM2.
+	file = platform_wii_music_load(file);
+	if (!file) {
+		return;
+	}
+#endif
 
 	uint8_t header[QOA_MIN_FILESIZE];
 	int read = fread(header, QOA_MIN_FILESIZE, 1, file);
