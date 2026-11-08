@@ -72,6 +72,8 @@ set(common_src
 	src/wipeout/particle.h
 	src/wipeout/race.c
 	src/wipeout/race.h
+	src/wipeout/rumble.c
+	src/wipeout/rumble.h
 	src/wipeout/scene.c
 	src/wipeout/scene.h
 	src/wipeout/sfx.c

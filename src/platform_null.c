@@ -23,6 +23,9 @@ void platform_set_fullscreen(bool fullscreen) {
 void platform_set_audio_mix_cb(void (*cb)(float *buffer, uint32_t len)) {
 	(void) cb;
 }
+void platform_set_rumble(float strength) {
+	(void) strength;
+}
 
 bool platform_asset_exists(const char *name) {
 	char *path = strcat(strcpy(temp_path, path_assets), name);
