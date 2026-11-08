@@ -10,6 +10,7 @@
 #include "droid.h"
 #include "camera.h"
 #include "scene.h"
+#include "rumble.h"
 #include "game.h"
 #include "hud.h"
 #include "sfx.h"
@@ -78,6 +79,7 @@ void race_update(void) {
 		droid_update(&g.droid, &g.ships[g.pilot]);
 		camera_update(&g.camera, &g.ships[g.pilot], &g.droid);
 		weapons_update();
+		rumble_update();
 		particles_update();
 		scene_update();
 		map_update();
@@ -182,6 +184,7 @@ static bool sort_points_compare(pilot_points_t *pa, pilot_points_t *pb) {
 }
 
 void race_end(void) {
+	rumble_stop();
 	race_release_control();
 
 	g.race_position = g.ships[g.pilot].position_rank;
@@ -273,6 +276,7 @@ void race_release_control(void) {
 }
 
 void race_pause(void) {
+	rumble_stop();
 	sfx_pause();
 	is_paused = true;
 }

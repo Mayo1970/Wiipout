@@ -235,6 +235,9 @@ void platform_set_audio_mix_cb(void (*cb)(float *buffer, uint32_t len)) {
 	audio_callback = cb;
 	SDL_PauseAudioDevice(audio_device, 0);
 }
+void platform_set_rumble(float strength) {
+	(void) strength;
+}
 
 
 bool platform_asset_exists(const char *name) {

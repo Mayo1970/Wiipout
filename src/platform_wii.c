@@ -44,6 +44,9 @@ static char temp_path[1024];
 static bool wants_to_exit;
 static volatile bool power_requested;
 static volatile bool reset_requested;
+static float rumble_strength;
+static float rumble_acc;
+static bool rumble_on;
 static u64 start_tick;
 static FILE *log_file;
 static bool log_writing;
@@ -212,6 +215,14 @@ static void platform_pad_joystick(float *pad, joystick_t *stick, bool right) {
 	platform_pad_stick(pad, sinf(angle) * stick->mag, cosf(angle) * stick->mag, right);
 }
 
+static void platform_rumble_off(void) {
+	rumble_strength = 0;
+	rumble_acc = 0;
+	WPAD_Rumble(WPAD_CHAN_0, 0);
+	PAD_ControlMotor(PAD_CHAN0, PAD_MOTOR_STOP_HARD);
+	rumble_on = false;
+}
+
 static void platform_pump_events(void) {
 	static float last[WII_PAD_COUNT];
 	static bool cc_format_sent;
@@ -292,6 +303,15 @@ static void platform_pump_events(void) {
 			last[i] = pad[i];
 		}
 	}
+	// Motors are on/off only, so strength is approximated by frame-rate PWM.
+	rumble_acc += rumble_strength;
+	bool on = rumble_acc >= 1.0f;
+	if (on) rumble_acc -= 1.0f;
+	if (on != rumble_on) {
+		WPAD_Rumble(WPAD_CHAN_0, on);
+		PAD_ControlMotor(PAD_CHAN0, on ? PAD_MOTOR_RUMBLE : PAD_MOTOR_STOP_HARD);
+		rumble_on = on;
+	}
 #ifdef WII_SMOKE
 	platform_smoke_update();
 #endif
@@ -312,7 +332,13 @@ static bool platform_data_root_exists(const char *path) {
 }
 
 void platform_exit(void) {
+	platform_rumble_off();
 	wants_to_exit = true;
+}
+
+void platform_set_rumble(float strength) {
+	if (strength <= 0) platform_rumble_off();
+	else rumble_strength = fminf(strength, 1.0f);
 }
 
 vec2i_t platform_screen_size(void) {
@@ -463,6 +489,7 @@ int main(int argc, char *argv[]) {
 			platform_pump_events();
 			VIDEO_WaitVSync();
 		}
+		platform_rumble_off();
 		platform_log_close();
 		if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 		exit(0);
@@ -496,6 +523,7 @@ int main(int argc, char *argv[]) {
 		}
 		system_cleanup();
 	}
+	platform_rumble_off();
 	platform_log_close();
 	if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 	exit(0);

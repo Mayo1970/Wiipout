@@ -15,6 +15,7 @@
 #include "droid.h"
 #include "hud.h"
 #include "sfx.h"
+#include "rumble.h"
 #include "ui.h"
 #include "particle.h"
 #include "race.h"
@@ -992,6 +993,7 @@ void game_init(void) {
 
 void game_set_scene(game_scene_t scene) {
 	sfx_reset();
+	rumble_stop();
 	scene_next = scene;
 }
 
