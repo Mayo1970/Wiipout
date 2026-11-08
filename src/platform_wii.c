@@ -3,6 +3,7 @@ static unsigned char stack[WII_MAIN_STACK_BYTES] __attribute__((aligned(8)));
 void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 
 #include <stdint.h>
+#include <math.h>
 #include <malloc.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
@@ -13,6 +14,7 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <ogc/conf.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
+#include <ogc/pad.h>
 #include <ogc/system.h>
 #include <ogc/video.h>
 #include <wiiuse/wpad.h>
@@ -22,10 +24,10 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include "system.h"
 #include "mem.h"
 #include "utils.h"
+#include "input.h"
 
 #ifdef WII_SMOKE
 #include <string.h>
-#include "input.h"
 #include "wipeout/game.h"
 #include "wipeout/ship.h"
 #include "wipeout/ship_ai.h"
@@ -175,10 +177,120 @@ static void platform_smoke_update(void) {
 }
 #endif
 
+#define WII_PAD_COUNT (INPUT_GAMEPAD_R_STICK_RIGHT - INPUT_GAMEPAD_A + 1)
+
+static void platform_pad_value(float *pad, button_t button, float value) {
+	int index = button - INPUT_GAMEPAD_A;
+	if (value > pad[index]) pad[index] = value;
+}
+
+static void platform_pad_button(float *pad, button_t button, u32 held, u32 mask) {
+	if (held & mask) platform_pad_value(pad, button, 1.0f);
+}
+
+static void platform_pad_stick(float *pad, float x, float y, bool right) {
+	float magnitude = sqrtf(x * x + y * y);
+	if (magnitude <= 0.2f) return;
+	float scaled = (fminf(magnitude, 1.0f) - 0.2f) / (0.8f * magnitude);
+	x *= scaled;
+	y *= scaled;
+	button_t up = right ? INPUT_GAMEPAD_R_STICK_UP : INPUT_GAMEPAD_L_STICK_UP;
+	platform_pad_value(pad, up, y);
+	platform_pad_value(pad, up + 1, -y);
+	platform_pad_value(pad, up + 2, -x);
+	platform_pad_value(pad, up + 3, x);
+	if (!right) {
+		platform_pad_value(pad, INPUT_GAMEPAD_DPAD_UP, y);
+		platform_pad_value(pad, INPUT_GAMEPAD_DPAD_DOWN, -y);
+		platform_pad_value(pad, INPUT_GAMEPAD_DPAD_LEFT, -x);
+		platform_pad_value(pad, INPUT_GAMEPAD_DPAD_RIGHT, x);
+	}
+}
+
+static void platform_pad_joystick(float *pad, joystick_t *stick, bool right) {
+	float angle = stick->ang * (3.14159265358979323846f / 180.0f);
+	platform_pad_stick(pad, sinf(angle) * stick->mag, cosf(angle) * stick->mag, right);
+}
+
 static void platform_pump_events(void) {
+	static float last[WII_PAD_COUNT];
+	static bool cc_format_sent;
+	float pad[WII_PAD_COUNT] = {0};
+	u32 type;
 	WPAD_ScanPads();
-	if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
-		platform_exit();
+	PAD_ScanPads();
+	WPADData *data = WPAD_Data(WPAD_CHAN_0);
+	bool connected = WPAD_Probe(WPAD_CHAN_0, &type) == WPAD_ERR_NONE && data && data->err == WPAD_ERR_NONE;
+	if (connected && type == WPAD_EXP_CLASSIC) {
+		if (!cc_format_sent) {
+			// Retry the format after the Classic Controller handshake completes.
+			WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
+			cc_format_sent = true;
+		}
+	}
+	else cc_format_sent = false;
+	if (connected) {
+		u32 held = data->btns_h;
+		if (data->btns_d & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) platform_exit();
+		if (type == WPAD_EXP_CLASSIC && data->exp.type == (int)type) {
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, WPAD_CLASSIC_BUTTON_UP);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, WPAD_CLASSIC_BUTTON_DOWN);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, WPAD_CLASSIC_BUTTON_LEFT);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, WPAD_CLASSIC_BUTTON_RIGHT);
+			platform_pad_button(pad, INPUT_GAMEPAD_A, held, WPAD_CLASSIC_BUTTON_B);
+			platform_pad_button(pad, INPUT_GAMEPAD_X, held, WPAD_CLASSIC_BUTTON_Y);
+			platform_pad_button(pad, INPUT_GAMEPAD_B, held, WPAD_CLASSIC_BUTTON_A);
+			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
+			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
+			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
+			platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, fminf(data->exp.classic.l_shoulder, 1.0f));
+			platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, fminf(data->exp.classic.r_shoulder, 1.0f));
+			platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
+			platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
+			platform_pad_button(pad, INPUT_GAMEPAD_SELECT, held, WPAD_CLASSIC_BUTTON_MINUS);
+			platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_CLASSIC_BUTTON_PLUS);
+			platform_pad_joystick(pad, &data->exp.classic.ljs, false);
+			platform_pad_joystick(pad, &data->exp.classic.rjs, true);
+		}
+		else if (type == WPAD_EXP_NONE || (type == WPAD_EXP_NUNCHUK && data->exp.type == (int)type)) {
+			bool nunchuk = type == WPAD_EXP_NUNCHUK;
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, nunchuk ? WPAD_BUTTON_UP : WPAD_BUTTON_RIGHT);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, nunchuk ? WPAD_BUTTON_DOWN : WPAD_BUTTON_LEFT);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, nunchuk ? WPAD_BUTTON_LEFT : WPAD_BUTTON_UP);
+			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, nunchuk ? WPAD_BUTTON_RIGHT : WPAD_BUTTON_DOWN);
+			platform_pad_button(pad, INPUT_GAMEPAD_A, held, nunchuk ? WPAD_BUTTON_A : WPAD_BUTTON_2);
+			platform_pad_button(pad, INPUT_GAMEPAD_X, held, nunchuk ? WPAD_BUTTON_B : WPAD_BUTTON_1);
+			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, nunchuk ? WPAD_NUNCHUK_BUTTON_Z : WPAD_BUTTON_A);
+			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, nunchuk ? WPAD_NUNCHUK_BUTTON_C : WPAD_BUTTON_B);
+			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_BUTTON_MINUS);
+			platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_BUTTON_PLUS);
+			if (nunchuk) platform_pad_joystick(pad, &data->exp.nunchuk.js, false);
+		}
+	}
+	u32 gc = PAD_ButtonsHeld(PAD_CHAN0);
+	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, gc, PAD_BUTTON_UP);
+	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, gc, PAD_BUTTON_DOWN);
+	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, gc, PAD_BUTTON_LEFT);
+	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, gc, PAD_BUTTON_RIGHT);
+	platform_pad_button(pad, INPUT_GAMEPAD_A, gc, PAD_BUTTON_A);
+	platform_pad_button(pad, INPUT_GAMEPAD_X, gc, PAD_BUTTON_B);
+	platform_pad_button(pad, INPUT_GAMEPAD_B, gc, PAD_BUTTON_X);
+	platform_pad_button(pad, INPUT_GAMEPAD_Y, gc, PAD_BUTTON_Y);
+	platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, gc, PAD_TRIGGER_L);
+	platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, gc, PAD_TRIGGER_R);
+	float left = PAD_TriggerL(PAD_CHAN0) / 255.0f;
+	float right = PAD_TriggerR(PAD_CHAN0) / 255.0f;
+	if (left > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, left);
+	if (right > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, right);
+	platform_pad_button(pad, INPUT_GAMEPAD_SELECT, gc, PAD_TRIGGER_Z);
+	platform_pad_button(pad, INPUT_GAMEPAD_START, gc, PAD_BUTTON_START);
+	platform_pad_stick(pad, PAD_StickX(PAD_CHAN0) / 72.0f, PAD_StickY(PAD_CHAN0) / 72.0f, false);
+	platform_pad_stick(pad, PAD_SubStickX(PAD_CHAN0) / 72.0f, PAD_SubStickY(PAD_CHAN0) / 72.0f, true);
+	for (int i = 0; i < WII_PAD_COUNT; i++) {
+		if (pad[i] != last[i]) {
+			input_set_button_state(INPUT_GAMEPAD_A + i, pad[i]);
+			last[i] = pad[i];
+		}
 	}
 #ifdef WII_SMOKE
 	platform_smoke_update();
@@ -321,6 +433,8 @@ int main(int argc, char *argv[]) {
 	start_tick = gettime();
 	platform_video_init();
 	WPAD_Init();
+	PAD_Init();
+	WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
 	SYS_SetPowerCallback(platform_power_callback);
 	SYS_SetResetCallback(platform_reset_callback);
 
