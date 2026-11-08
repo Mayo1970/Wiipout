@@ -51,6 +51,54 @@ static uint32_t vertex_arena_used;
 static bool depth_write, depth_test;
 static float depth_offset;
 
+#ifdef WII_DIAG
+#define DIAG_BATCHES 16
+typedef struct {
+	u16 token, tris, tex, w, h;
+	u8 fmt, flags;
+	float min[3], max[3], uv_min[2], uv_max[2];
+} diag_batch_t;
+static diag_batch_t diag_batches[DIAG_BATCHES];
+static u32 diag_batch_count;
+static u16 diag_token;
+
+// Each batch ends with a draw sync token, so the PE token register names the last batch the GPU finished.
+static void diag_batch_record(vec3_t *pos, vec2_t *uv, uint32_t count, gx_texture_t *texture) {
+	diag_batch_t *b = &diag_batches[diag_batch_count++ % DIAG_BATCHES];
+	if (++diag_token == 0) diag_token = 1;
+	b->token = diag_token;
+	b->tris = count / 3;
+	b->tex = batch_texture;
+	b->w = texture->padded_width;
+	b->h = texture->padded_height;
+	b->fmt = texture->format;
+	b->flags = (view_2d ? 1 : 0) | (depth_test ? 2 : 0) | (depth_write ? 4 : 0) | (blend_mode << 4);
+	for (int a = 0; a < 3; a++) { b->min[a] = 1e30f; b->max[a] = -1e30f; }
+	for (int a = 0; a < 2; a++) { b->uv_min[a] = 1e30f; b->uv_max[a] = -1e30f; }
+	for (uint32_t i = 0; i < count; i++) {
+		float p[3] = {pos[i].x, pos[i].y, pos[i].z}, t[2] = {uv[i].x, uv[i].y};
+		for (int a = 0; a < 3; a++) { b->min[a] = fminf(b->min[a], p[a]); b->max[a] = fmaxf(b->max[a], p[a]); }
+		for (int a = 0; a < 2; a++) { b->uv_min[a] = fminf(b->uv_min[a], t[a]); b->uv_max[a] = fmaxf(b->uv_max[a], t[a]); }
+	}
+	GX_SetDrawSync(diag_token);
+}
+
+int render_gx_diag_format(char *out, int size) {
+	u16 done = GX_GetDrawSync();
+	int n = snprintf(out, size, " gpu done token %u, last sent %u\n", done, diag_token);
+	u32 first = diag_batch_count > DIAG_BATCHES ? diag_batch_count - DIAG_BATCHES : 0;
+	for (u32 i = first; i < diag_batch_count && n < size - 160; i++) {
+		diag_batch_t *b = &diag_batches[i % DIAG_BATCHES];
+		n += snprintf(out + n, size - n,
+			" %c%u t%u tex%u %ux%u f%u fl%02x p(%.0f %.0f %.0f)-(%.0f %.0f %.0f) uv(%.2f %.2f)-(%.2f %.2f)\n",
+			b->token == done ? '>' : ' ', b->token, b->tris, b->tex, b->w, b->h, b->fmt, b->flags,
+			b->min[0], b->min[1], b->min[2], b->max[0], b->max[1], b->max[2],
+			b->uv_min[0], b->uv_min[1], b->uv_max[0], b->uv_max[1]);
+	}
+	return n;
+}
+#endif
+
 static bool vertex_valid(vec3_t p) {
 	return fabsf(p.x) < VERTEX_LIMIT && fabsf(p.y) < VERTEX_LIMIT && fabsf(p.z) < VERTEX_LIMIT;
 }
@@ -108,6 +156,9 @@ static void render_flush(void) {
 		GX_Position1x16(i); GX_Color1x16(i); GX_TexCoord1x16(i);
 	}
 	GX_End();
+#ifdef WII_DIAG
+	diag_batch_record(positions, uvs, count, texture);
+#endif
 	running_stats.num_tris += tris_len;
 	running_stats.num_draw_calls++;
 	tris_len = 0;

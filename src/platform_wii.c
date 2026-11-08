@@ -330,7 +330,6 @@ static void platform_smoke_update(void) {
 #endif
 
 #define WII_PAD_COUNT (INPUT_GAMEPAD_R_STICK_RIGHT - INPUT_GAMEPAD_A + 1)
-#define WII_TRIGGER_DEADZONE 0.25f
 #ifdef WII_DIAG
 static float diag_cc_l = -1, diag_cc_r = -1;
 #endif
@@ -342,11 +341,6 @@ static void platform_pad_value(float *pad, button_t button, float value) {
 
 static void platform_pad_button(float *pad, button_t button, u32 held, u32 mask) {
 	if (held & mask) platform_pad_value(pad, button, 1.0f);
-}
-
-static void platform_pad_trigger(float *pad, button_t button, float value) {
-	if (value <= WII_TRIGGER_DEADZONE) return;
-	platform_pad_value(pad, button, fminf((value - WII_TRIGGER_DEADZONE) / (1.0f - WII_TRIGGER_DEADZONE), 1.0f));
 }
 
 static void platform_pad_stick(float *pad, float x, float y, bool right) {
@@ -413,9 +407,7 @@ static void platform_pump_events(void) {
 			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
 			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
-			// Real Classic Controllers rest above 0, which held both air brakes on and slowed the ship.
-			platform_pad_trigger(pad, INPUT_GAMEPAD_L_SHOULDER, data->exp.classic.l_shoulder);
-			platform_pad_trigger(pad, INPUT_GAMEPAD_R_SHOULDER, data->exp.classic.r_shoulder);
+			// The analog L/R read 1.0 at rest on hardware (both air brakes on), so only the digital click counts.
 #ifdef WII_DIAG
 			diag_cc_l = data->exp.classic.l_shoulder;
 			diag_cc_r = data->exp.classic.r_shoulder;
@@ -769,11 +761,18 @@ static void *diag_watch(void *arg) {
 		}
 		// The SD write can block if the main thread holds the FAT lock, so it goes last.
 		if (log_file) {
+			static char batches[2560];
 			fwrite(diag_text, 1, strlen(diag_text), log_file);
-			fprintf(log_file, "diag: screen done\n");
+			fprintf(log_file, "diag: last GX batches (> = last one the GPU finished; fl: 1=2d 2=ztest 4=zwrite, blend<<4)\n");
+			int len = render_gx_diag_format(batches, sizeof(batches));
+			fwrite(batches, 1, len < (int)sizeof(batches) ? len : (int)sizeof(batches) - 1, log_file);
 			fflush(log_file);
 			fsync(fileno(log_file));
 		}
+#ifdef WII_DIAG_SELFTEST
+		// Dolphin flushes its SD image only on a clean power off.
+		SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+#endif
 		while (true) usleep(1000000);
 	}
 	return NULL;

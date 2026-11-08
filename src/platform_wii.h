@@ -28,6 +28,7 @@ enum {
 #ifdef WII_DIAG
 extern volatile u32 wii_diag_phase;
 extern u32 wii_diag_dropped_tris;
+int render_gx_diag_format(char *out, int size);
 #define WII_DIAG_PHASE(p) (wii_diag_phase = (p))
 #else
 #define WII_DIAG_PHASE(p) ((void)0)
