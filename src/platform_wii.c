@@ -21,6 +21,11 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <ogc/system.h>
 #include <ogc/video.h>
 #include <wiiuse/wpad.h>
+#ifdef WII_DIAG
+#include <gccore.h>
+#include <tuxedo/thread.h>
+#include <tuxedo/ppc/exception.h>
+#endif
 
 #include "platform.h"
 #include "platform_wii.h"
@@ -325,6 +330,9 @@ static void platform_smoke_update(void) {
 #endif
 
 #define WII_PAD_COUNT (INPUT_GAMEPAD_R_STICK_RIGHT - INPUT_GAMEPAD_A + 1)
+#ifdef WII_DIAG
+static float diag_cc_l = -1, diag_cc_r = -1;
+#endif
 
 static void platform_pad_value(float *pad, button_t button, float value) {
 	int index = button - INPUT_GAMEPAD_A;
@@ -399,8 +407,11 @@ static void platform_pump_events(void) {
 			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
 			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
-			platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, fminf(data->exp.classic.l_shoulder, 1.0f));
-			platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, fminf(data->exp.classic.r_shoulder, 1.0f));
+			// The analog L/R read 1.0 at rest on hardware (both air brakes on), so only the digital click counts.
+#ifdef WII_DIAG
+			diag_cc_l = data->exp.classic.l_shoulder;
+			diag_cc_r = data->exp.classic.r_shoulder;
+#endif
 			platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
 			platform_pad_button(pad, INPUT_GAMEPAD_SELECT, held, WPAD_CLASSIC_BUTTON_MINUS);
@@ -629,6 +640,9 @@ void platform_wii_mem_log(const char *tag) {
 		tag, (unsigned long)s.bump, (unsigned long)s.temp, (unsigned long)s.bump_peak,
 		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
 		heap, mem1, mem2, low);
+#ifdef WII_DIAG
+	printf("diag %s: dropped_tris=%lu cc_l=%.3f cc_r=%.3f\n", tag, (unsigned long)wii_diag_dropped_tris, diag_cc_l, diag_cc_r);
+#endif
 #ifdef WII_SMOKE
 #ifdef WII_SMOKE_INTRO
 	if (strcmp(tag, "intro") == 0) {
@@ -661,6 +675,130 @@ void platform_wii_mem_log(const char *tag) {
 	printf("SMOKE scene %s frame %u\n", tag, (unsigned int)smoke_frame);
 #endif
 }
+
+#ifdef WII_DIAG
+#define DIAG_CHAIN 10
+volatile u32 wii_diag_phase;
+u32 wii_diag_dropped_tris;
+static volatile u32 diag_frame;
+static KThread *diag_main;
+static u8 diag_stack[16 * 1024] __attribute__((aligned(32)));
+static lwp_t diag_thread;
+static char diag_text[1024];
+static volatile bool diag_crashed;
+
+static const char *diag_phase_names[] = {
+	"none", "input", "update", "flush wait", "texture wait", "frame copy", "frame wait", "frame flip", "audio",
+};
+
+static bool diag_ram(u32 p) {
+	return !(p & 3) && ((p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000));
+}
+
+static void diag_format(const char *title, u32 pc, u32 lr, u32 sp, u32 extra) {
+	u32 phase = wii_diag_phase;
+	u8 overhi, underlow, read_idle, cmd_idle, brkpt;
+	GX_GetGPStatus(&overhi, &underlow, &read_idle, &cmd_idle, &brkpt);
+	int n = snprintf(diag_text, sizeof(diag_text),
+		"\n\n %s\n frame %lu, phase %lu (%s), dropped tris %lu\n GP: overhi=%u underlow=%u read_idle=%u cmd_idle=%u brkpt=%u\n"
+		" pc %08lx lr %08lx sp %08lx x %08lx\n chain:",
+		title, (unsigned long)diag_frame, (unsigned long)phase,
+		phase < sizeof(diag_phase_names) / sizeof(diag_phase_names[0]) ? diag_phase_names[phase] : "?",
+		(unsigned long)wii_diag_dropped_tris, overhi, underlow, read_idle, cmd_idle, brkpt,
+		(unsigned long)pc, (unsigned long)lr, (unsigned long)sp, (unsigned long)extra);
+	u32 f = sp;
+	for (int j = 0; j < DIAG_CHAIN && n < (int)sizeof(diag_text) - 32; j++) {
+		f = diag_ram(f) ? *(u32 *)f : 0;
+		u32 ret = diag_ram(f) ? *((u32 *)f + 1) : 0;
+		n += snprintf(diag_text + n, sizeof(diag_text) - n, "%s %08lx", j == 5 ? "\n       " : "", (unsigned long)ret);
+	}
+	snprintf(diag_text + n, sizeof(diag_text) - n, "\n\n Take a photo of this screen.\n");
+}
+
+// Draw on both XFBs: plain memory writes, so this also works with interrupts off.
+static void diag_show(void) {
+	for (int i = 0; i < 2; i++) {
+		void *xfb = platform_wii_xfb(i);
+		VIDEO_ClearFrameBuffer(video_mode, xfb, COLOR_BLACK);
+		console_init(xfb, 20, 20, video_mode->fbWidth, video_mode->xfbHeight, video_mode->fbWidth * VI_DISPLAY_PIX_SZ);
+		console_stdout->write_r(_REENT, NULL, diag_text, strlen(diag_text));
+	}
+}
+
+static void diag_panic(unsigned exid, PPCContext *ctx) {
+	// Interrupts stay off from here, so only the screen report is possible, not the SD log.
+	if (!diag_crashed) {
+		diag_crashed = true;
+		u32 dar;
+		__asm__ volatile("mfdar %0" : "=r"(dar));
+		char title[48];
+		snprintf(title, sizeof(title), "WIIPEOUT CRASH: exception %u (x = dar)", exid);
+		diag_format(title, ctx->pc, ctx->lr, ctx->gpr[1], dar);
+		diag_show();
+	}
+	while (true) {}
+}
+
+// Higher priority than main, so it runs even when the main thread spins.
+static void *diag_watch(void *arg) {
+	(void)arg;
+	u32 last = diag_frame;
+	u64 since = gettime();
+	while (true) {
+		usleep(250000);
+		if (diag_frame != last) {
+			last = diag_frame;
+			since = gettime();
+			continue;
+		}
+		u32 stalled = diff_msec(since, gettime());
+		if (stalled < 3000) continue;
+		if (!diag_crashed) {
+			// main is switched out here, so its saved context holds where it stopped.
+			PPCContext *ctx = &diag_main->ctx;
+			diag_format("WIIPEOUT HANG: main loop stopped (x = msr)", ctx->pc, ctx->lr, ctx->gpr[1], ctx->msr);
+			diag_show();
+		}
+		// The SD write can block if the main thread holds the FAT lock, so it goes last.
+		if (log_file) {
+			static char batches[2560];
+			fwrite(diag_text, 1, strlen(diag_text), log_file);
+			fprintf(log_file, "diag: last GX batches (> = last one the GPU finished; fl: 1=2d 2=ztest 4=zwrite, blend<<4)\n");
+			int len = render_gx_diag_format(batches, sizeof(batches));
+			fwrite(batches, 1, len < (int)sizeof(batches) ? len : (int)sizeof(batches) - 1, log_file);
+			fflush(log_file);
+			fsync(fileno(log_file));
+		}
+#ifdef WII_DIAG_SELFTEST
+		// Dolphin flushes its SD image only on a clean power off.
+		SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+#endif
+		while (true) usleep(1000000);
+	}
+	return NULL;
+}
+
+#ifdef WII_DIAG_SELFTEST
+static void __attribute__((noinline)) diag_selftest(void) {
+	if (WII_DIAG_SELFTEST == 2) *(volatile u32 *)0x10 = 1;
+	while (true) __asm__ volatile("nop");
+}
+#endif
+
+static void diag_init(void) {
+	diag_main = KThreadGetSelf();
+	PPCExcptCurPanicFn = diag_panic;
+	LWP_CreateThread(&diag_thread, diag_watch, NULL, diag_stack, sizeof(diag_stack), 100);
+	printf("diag: watchdog on\n");
+}
+
+static void diag_frame_done(void) {
+	diag_frame++;
+#ifdef WII_DIAG_SELFTEST
+	if (diag_frame == 600) diag_selftest();
+#endif
+}
+#endif
 
 int main(int argc, char *argv[]) {
 	uintptr_t hi = (uintptr_t)SYS_GetArena2Hi();
@@ -741,14 +879,23 @@ int main(int argc, char *argv[]) {
 		(video_mode->viTVMode & VI_NON_INTERLACE) ? "progressive" : "interlaced",
 		video_widescreen ? "16:9" : "4:3");
 	platform_wii_mem_log("boot");
+#ifdef WII_DIAG
+	diag_init();
+#endif
 	if (!wants_to_exit && !power_requested && !reset_requested) {
 		system_init();
 		while (!wants_to_exit && !power_requested && !reset_requested) {
+			WII_DIAG_PHASE(WII_PHASE_INPUT);
 			platform_pump_events();
 			if (wants_to_exit || power_requested || reset_requested) break;
 			platform_prepare_frame();
+			WII_DIAG_PHASE(WII_PHASE_UPDATE);
 			system_update();
+			WII_DIAG_PHASE(WII_PHASE_AUDIO);
 			platform_end_frame();
+#ifdef WII_DIAG
+			diag_frame_done();
+#endif
 		}
 		system_cleanup();
 	}
