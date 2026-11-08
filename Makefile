@@ -13,6 +13,12 @@ WII_TARGET_ELF = $(WII_BUILD_DIR)/boot.elf
 WII_TARGET_DOL = $(WII_BUILD_DIR)/boot.dol
 WII_CC ?= $(DEVKITPRO)/devkitPPC/bin/powerpc-eabi-gcc
 WII_ELF2DOL ?= $(DEVKITPRO)/tools/bin/elf2dol
+WII_SMOKE ?= 0
+ifeq ($(PLATFORM),WII)
+ifeq ($(WII_SMOKE),1)
+WII_BUILD_DIR = build/wii-smoke
+endif
+endif
 
 ifeq ($(PLATFORM),WII)
 	.DEFAULT_GOAL := $(WII_TARGET_DOL)
@@ -123,6 +129,10 @@ else
 	WII_ARCH_FLAGS = -mrvl -mcpu=750 -meabi -mhard-float
 	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS) -DPLATFORM_WII
 	WII_L_FLAGS = -L$(DEVKITPRO)/libogc/lib/wii -lwiiuse -lbte -lfat -logc -lm
+
+ifeq ($(WII_SMOKE),1)
+	C_FLAGS := $(C_FLAGS) -DWII_SMOKE
+endif
 endif
 
 
