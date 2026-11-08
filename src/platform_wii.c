@@ -28,6 +28,8 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #endif
 
 static GXRModeObj *video_mode;
+static void *video_xfb[2];
+static bool console_detached;
 static char *path_assets = "";
 static char *path_userdata = "";
 static char temp_path[1024];
@@ -50,7 +52,7 @@ static u32 smoke_race_frame;
 #endif
 
 static ssize_t platform_log_write(const devoptab_t *console, struct _reent *reent, void *fd, const char *buffer, size_t len) {
-	ssize_t result = console->write_r ? console->write_r(reent, fd, buffer, len) : (ssize_t)len;
+	ssize_t result = !console_detached && console->write_r ? console->write_r(reent, fd, buffer, len) : (ssize_t)len;
 	if (log_file && !log_writing) {
 		log_writing = true;
 		fwrite(buffer, 1, len, log_file);
@@ -65,6 +67,20 @@ static ssize_t platform_log_write_stdout(struct _reent *reent, void *fd, const c
 
 static ssize_t platform_log_write_stderr(struct _reent *reent, void *fd, const char *buffer, size_t len) {
 	return platform_log_write(console_stderr, reent, fd, buffer, len);
+}
+
+GXRModeObj *platform_wii_video_mode(void) {
+	return video_mode;
+}
+
+void *platform_wii_xfb(int index) {
+	return video_xfb[index];
+}
+
+void platform_wii_console_detach(void) {
+	fflush(stdout);
+	fflush(stderr);
+	console_detached = true;
 }
 
 void platform_wii_log_sync(void) {
@@ -223,10 +239,11 @@ uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
 static void platform_video_init(void) {
 	VIDEO_Init();
 	video_mode = VIDEO_GetPreferredMode(NULL);
-	void *xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
-	console_init(xfb, 20, 20, video_mode->fbWidth, video_mode->xfbHeight, video_mode->fbWidth * VI_DISPLAY_PIX_SZ);
+	video_xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
+	video_xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
+	console_init(video_xfb[0], 20, 20, video_mode->fbWidth, video_mode->xfbHeight, video_mode->fbWidth * VI_DISPLAY_PIX_SZ);
 	VIDEO_Configure(video_mode);
-	VIDEO_SetNextFramebuffer(xfb);
+	VIDEO_SetNextFramebuffer(video_xfb[0]);
 	VIDEO_SetBlack(FALSE);
 	VIDEO_Flush();
 	VIDEO_WaitVSync();
