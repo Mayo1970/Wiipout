@@ -1,5 +1,6 @@
 #include <gccore.h>
 #include <malloc.h>
+#include <math.h>
 #include <string.h>
 
 #include "render.h"
@@ -11,6 +12,8 @@
 #define FIFO_SIZE (256 * 1024)
 #define VERTEX_ARENA_SIZE (512 * 1024)
 #define NEAR_PLANE 16.0f
+// Far above any track or UI coordinate; NaN also fails the < test.
+#define VERTEX_LIMIT 1.0e7f
 // Render-side overscan inset in EFB pixels; the VI mode stays untouched.
 #ifndef WII_OVERSCAN_X
 #define WII_OVERSCAN_X 0
@@ -48,7 +51,28 @@ static uint32_t vertex_arena_used;
 static bool depth_write, depth_test;
 static float depth_offset;
 
+static bool vertex_valid(vec3_t p) {
+	return fabsf(p.x) < VERTEX_LIMIT && fabsf(p.y) < VERTEX_LIMIT && fabsf(p.z) < VERTEX_LIMIT;
+}
+
+// The real GPU can lock up on NaN, infinite or huge vertices (PC GPUs and Dolphin skip them), so drop those triangles.
+static void drop_invalid_tris(void) {
+	uint32_t kept = 0;
+	for (uint32_t i = 0; i < tris_len; i++) {
+		tris_t *t = &tris_buffer[i];
+		if (vertex_valid(t->vertices[0].pos) && vertex_valid(t->vertices[1].pos) && vertex_valid(t->vertices[2].pos)) {
+			if (kept != i) tris_buffer[kept] = *t;
+			kept++;
+		}
+	}
+#ifdef WII_DIAG
+	wii_diag_dropped_tris += tris_len - kept;
+#endif
+	tris_len = kept;
+}
+
 static void render_flush(void) {
+	drop_invalid_tris();
 	if (!tris_len) return;
 	gx_texture_t *texture = &textures[batch_texture];
 	uint32_t count = tris_len * 3;

@@ -330,6 +330,10 @@ static void platform_smoke_update(void) {
 #endif
 
 #define WII_PAD_COUNT (INPUT_GAMEPAD_R_STICK_RIGHT - INPUT_GAMEPAD_A + 1)
+#define WII_TRIGGER_DEADZONE 0.25f
+#ifdef WII_DIAG
+static float diag_cc_l = -1, diag_cc_r = -1;
+#endif
 
 static void platform_pad_value(float *pad, button_t button, float value) {
 	int index = button - INPUT_GAMEPAD_A;
@@ -338,6 +342,11 @@ static void platform_pad_value(float *pad, button_t button, float value) {
 
 static void platform_pad_button(float *pad, button_t button, u32 held, u32 mask) {
 	if (held & mask) platform_pad_value(pad, button, 1.0f);
+}
+
+static void platform_pad_trigger(float *pad, button_t button, float value) {
+	if (value <= WII_TRIGGER_DEADZONE) return;
+	platform_pad_value(pad, button, fminf((value - WII_TRIGGER_DEADZONE) / (1.0f - WII_TRIGGER_DEADZONE), 1.0f));
 }
 
 static void platform_pad_stick(float *pad, float x, float y, bool right) {
@@ -404,8 +413,13 @@ static void platform_pump_events(void) {
 			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
 			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
-			platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, fminf(data->exp.classic.l_shoulder, 1.0f));
-			platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, fminf(data->exp.classic.r_shoulder, 1.0f));
+			// Real Classic Controllers rest above 0, which held both air brakes on and slowed the ship.
+			platform_pad_trigger(pad, INPUT_GAMEPAD_L_SHOULDER, data->exp.classic.l_shoulder);
+			platform_pad_trigger(pad, INPUT_GAMEPAD_R_SHOULDER, data->exp.classic.r_shoulder);
+#ifdef WII_DIAG
+			diag_cc_l = data->exp.classic.l_shoulder;
+			diag_cc_r = data->exp.classic.r_shoulder;
+#endif
 			platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
 			platform_pad_button(pad, INPUT_GAMEPAD_SELECT, held, WPAD_CLASSIC_BUTTON_MINUS);
@@ -634,6 +648,9 @@ void platform_wii_mem_log(const char *tag) {
 		tag, (unsigned long)s.bump, (unsigned long)s.temp, (unsigned long)s.bump_peak,
 		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
 		heap, mem1, mem2, low);
+#ifdef WII_DIAG
+	printf("diag %s: dropped_tris=%lu cc_l=%.3f cc_r=%.3f\n", tag, (unsigned long)wii_diag_dropped_tris, diag_cc_l, diag_cc_r);
+#endif
 #ifdef WII_SMOKE
 #ifdef WII_SMOKE_INTRO
 	if (strcmp(tag, "intro") == 0) {
@@ -670,6 +687,7 @@ void platform_wii_mem_log(const char *tag) {
 #ifdef WII_DIAG
 #define DIAG_CHAIN 10
 volatile u32 wii_diag_phase;
+u32 wii_diag_dropped_tris;
 static volatile u32 diag_frame;
 static KThread *diag_main;
 static u8 diag_stack[16 * 1024] __attribute__((aligned(32)));
@@ -690,11 +708,11 @@ static void diag_format(const char *title, u32 pc, u32 lr, u32 sp, u32 extra) {
 	u8 overhi, underlow, read_idle, cmd_idle, brkpt;
 	GX_GetGPStatus(&overhi, &underlow, &read_idle, &cmd_idle, &brkpt);
 	int n = snprintf(diag_text, sizeof(diag_text),
-		"\n\n %s\n frame %lu, phase %lu (%s)\n GP: overhi=%u underlow=%u read_idle=%u cmd_idle=%u brkpt=%u\n"
+		"\n\n %s\n frame %lu, phase %lu (%s), dropped tris %lu\n GP: overhi=%u underlow=%u read_idle=%u cmd_idle=%u brkpt=%u\n"
 		" pc %08lx lr %08lx sp %08lx x %08lx\n chain:",
 		title, (unsigned long)diag_frame, (unsigned long)phase,
 		phase < sizeof(diag_phase_names) / sizeof(diag_phase_names[0]) ? diag_phase_names[phase] : "?",
-		overhi, underlow, read_idle, cmd_idle, brkpt,
+		(unsigned long)wii_diag_dropped_tris, overhi, underlow, read_idle, cmd_idle, brkpt,
 		(unsigned long)pc, (unsigned long)lr, (unsigned long)sp, (unsigned long)extra);
 	u32 f = sp;
 	for (int j = 0; j < DIAG_CHAIN && n < (int)sizeof(diag_text) - 32; j++) {
