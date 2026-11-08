@@ -22,6 +22,11 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include "mem.h"
 #include "utils.h"
 
+#ifdef WII_SMOKE
+#include <string.h>
+#include "input.h"
+#endif
+
 static GXRModeObj *video_mode;
 static char *path_assets = "";
 static char *path_userdata = "";
@@ -36,6 +41,13 @@ static const devoptab_t *console_stdout;
 static const devoptab_t *console_stderr;
 static devoptab_t log_stdout;
 static devoptab_t log_stderr;
+
+#ifdef WII_SMOKE
+static u32 smoke_frame;
+static bool smoke_menu_seen;
+static bool smoke_race_seen;
+static u32 smoke_race_frame;
+#endif
 
 static ssize_t platform_log_write(const devoptab_t *console, struct _reent *reent, void *fd, const char *buffer, size_t len) {
 	ssize_t result = console->write_r ? console->write_r(reent, fd, buffer, len) : (ssize_t)len;
@@ -98,11 +110,36 @@ static void platform_reset_callback(u32 irq, void *context) {
 	reset_requested = true;
 }
 
+#ifdef WII_SMOKE
+static void platform_smoke_update(void) {
+	smoke_frame++;
+	// RETURN confirms menu pages; tapping every 30 frames makes each press a new edge.
+	// The release is always sent so RETURN is never left held when the race loads.
+	if (!smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
+	if (smoke_frame % 30 == 1) input_set_button_state(INPUT_KEY_RETURN, 0.0f);
+	if (smoke_race_seen && smoke_frame - smoke_race_frame >= 300) {
+		printf("SMOKE PASS: main menu and race reached, frame %u\n", (unsigned int)smoke_frame);
+		platform_wii_log_sync();
+		platform_exit();
+		return;
+	}
+	// Reached only while the race has not passed yet, so a late race also times out.
+	if (smoke_frame >= 60 * 180) {
+		printf("SMOKE FAIL: timeout, menu=%d race=%d\n", smoke_menu_seen, smoke_race_seen);
+		platform_wii_log_sync();
+		platform_exit();
+	}
+}
+#endif
+
 static void platform_pump_events(void) {
 	WPAD_ScanPads();
 	if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
 		platform_exit();
 	}
+#ifdef WII_SMOKE
+	platform_smoke_update();
+#endif
 }
 
 static void platform_prepare_frame(void) {
@@ -209,6 +246,14 @@ void platform_wii_mem_log(const char *tag) {
 		tag, (unsigned long)s.bump, (unsigned long)s.temp, (unsigned long)s.bump_peak,
 		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
 		heap, mem1, mem2, low);
+#ifdef WII_SMOKE
+	if (strcmp(tag, "menu") == 0) smoke_menu_seen = true;
+	if (strcmp(tag, "race") == 0 && smoke_menu_seen) {
+		smoke_race_seen = true;
+		smoke_race_frame = smoke_frame;
+	}
+	printf("SMOKE scene %s frame %u\n", tag, (unsigned int)smoke_frame);
+#endif
 }
 
 int main(int argc, char *argv[]) {
