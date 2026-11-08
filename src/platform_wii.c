@@ -4,6 +4,12 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 
 #include <stdint.h>
 #include <malloc.h>
+#include <sys/iosupport.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <dvm.h>
+#include <sdcard/wiisd_io.h>
+#include <ogc/usbstorage.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
 #include <ogc/system.h>
@@ -12,24 +18,117 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 
 #include "platform.h"
 #include "platform_wii.h"
+#include "system.h"
 #include "mem.h"
 #include "utils.h"
 
 static GXRModeObj *video_mode;
 static char *path_assets = "";
 static char *path_userdata = "";
-static char temp_path[512];
+static char temp_path[1024];
+static bool wants_to_exit;
+static volatile bool power_requested;
+static volatile bool reset_requested;
+static u64 start_tick;
+static FILE *log_file;
+static bool log_writing;
+static const devoptab_t *console_stdout;
+static const devoptab_t *console_stderr;
+static devoptab_t log_stdout;
+static devoptab_t log_stderr;
+
+static ssize_t platform_log_write(const devoptab_t *console, struct _reent *reent, void *fd, const char *buffer, size_t len) {
+	ssize_t result = console->write_r ? console->write_r(reent, fd, buffer, len) : (ssize_t)len;
+	if (log_file && !log_writing) {
+		log_writing = true;
+		fwrite(buffer, 1, len, log_file);
+		log_writing = false;
+	}
+	return result;
+}
+
+static ssize_t platform_log_write_stdout(struct _reent *reent, void *fd, const char *buffer, size_t len) {
+	return platform_log_write(console_stdout, reent, fd, buffer, len);
+}
+
+static ssize_t platform_log_write_stderr(struct _reent *reent, void *fd, const char *buffer, size_t len) {
+	return platform_log_write(console_stderr, reent, fd, buffer, len);
+}
+
+void platform_wii_log_sync(void) {
+	if (log_file) {
+		fflush(stdout);
+		fflush(stderr);
+		fflush(log_file);
+		fsync(fileno(log_file));
+	}
+}
+
+static void platform_log_close(void) {
+	if (log_file) {
+		platform_wii_log_sync();
+		fclose(log_file);
+		log_file = NULL;
+	}
+}
+
+static void platform_log_init(bool sd_mounted) {
+	console_stdout = devoptab_list[STD_OUT];
+	console_stderr = devoptab_list[STD_ERR];
+	log_stdout = *console_stdout;
+	log_stderr = *console_stderr;
+	log_stdout.write_r = platform_log_write_stdout;
+	log_stderr.write_r = platform_log_write_stderr;
+	devoptab_list[STD_OUT] = &log_stdout;
+	devoptab_list[STD_ERR] = &log_stderr;
+	if (sd_mounted) {
+		mkdir("sd:/apps/wiipeout", 0777);
+		log_file = fopen("sd:/apps/wiipeout/wiipeout.log", "w");
+	}
+	atexit(platform_log_close);
+}
+
+static void platform_power_callback(void) {
+	power_requested = true;
+}
+
+static void platform_reset_callback(u32 irq, void *context) {
+	(void)irq;
+	(void)context;
+	reset_requested = true;
+}
+
+static void platform_pump_events(void) {
+	WPAD_ScanPads();
+	if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
+		platform_exit();
+	}
+}
+
+static void platform_prepare_frame(void) {
+}
+
+static void platform_end_frame(void) {
+#if defined(RENDERER_NULL)
+	VIDEO_WaitVSync();
+#endif
+}
+
+static bool platform_data_root_exists(const char *path) {
+	struct stat info;
+	return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
 
 void platform_exit(void) {
-	exit(0);
+	wants_to_exit = true;
 }
 
 vec2i_t platform_screen_size(void) {
-	return video_mode ? vec2i(video_mode->fbWidth, video_mode->xfbHeight) : vec2i(640, 480);
+	return video_mode ? vec2i(video_mode->fbWidth, video_mode->efbHeight) : vec2i(640, 480);
 }
 
 double platform_now(void) {
-	return (double)ticks_to_millisecs(gettime()) / 1000.0;
+	return (double)diff_ticks(start_tick, gettime()) / (double)(TB_TIMER_CLOCK * 1000ULL);
 }
 
 bool platform_get_fullscreen(void) {
@@ -54,29 +153,37 @@ bool platform_asset_exists(const char *name) {
 }
 
 FILE *platform_open_asset(const char *name, const char *mode) {
-	return fopen(platform_path(path_assets, name), mode);
+	FILE *file = fopen(platform_path(path_assets, name), mode);
+	platform_wii_log_sync();
+	return file;
 }
 
 uint8_t *platform_load_asset(const char *name, uint32_t *bytes_read) {
-	return file_load(platform_path(path_assets, name), bytes_read);
+	uint8_t *bytes = file_load(platform_path(path_assets, name), bytes_read);
+	platform_wii_log_sync();
+	return bytes;
 }
 
 uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
 	char *path = platform_path(path_userdata, name);
 	if (!file_exists(path)) {
 		*bytes_read = 0;
+		platform_wii_log_sync();
 		return NULL;
 	}
-	return file_load(path, bytes_read);
+	uint8_t *bytes = file_load(path, bytes_read);
+	platform_wii_log_sync();
+	return bytes;
 }
 
 uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
-	return file_store(platform_path(path_userdata, name), bytes, len);
+	uint32_t written = file_store(platform_path(path_userdata, name), bytes, len);
+	platform_wii_log_sync();
+	return written;
 }
 
 static void platform_video_init(void) {
 	VIDEO_Init();
-	WPAD_Init();
 	video_mode = VIDEO_GetPreferredMode(NULL);
 	void *xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(video_mode));
 	console_init(xfb, 20, 20, video_mode->fbWidth, video_mode->xfbHeight, video_mode->fbWidth * VI_DISPLAY_PIX_SZ);
@@ -118,24 +225,67 @@ int main(int argc, char *argv[]) {
 	(void)argc;
 	(void)argv;
 
-	#ifdef PATH_ASSETS
-		path_assets = TOSTRING(PATH_ASSETS);
-	#endif
-	#ifdef PATH_USERDATA
-		path_userdata = TOSTRING(PATH_USERDATA);
-	#endif
-
+	start_tick = gettime();
 	platform_video_init();
-	platform_wii_mem_log("boot");
-	printf("Wiipeout platform stub is running. Press HOME to return to the Homebrew Channel.\n");
+	WPAD_Init();
+	SYS_SetPowerCallback(platform_power_callback);
+	SYS_SetResetCallback(platform_reset_callback);
 
-	while (true) {
-		WPAD_ScanPads();
-		if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
-			exit(0);
-		}
-		VIDEO_WaitVSync();
+	bool sd_mounted = dvmProbeMountDiscIface("sd", &__io_wiisd, 4, 64);
+	platform_log_init(sd_mounted);
+	const char *data_root = NULL;
+	if (sd_mounted && platform_data_root_exists("sd:/apps/wiipeout/wipeout")) {
+		data_root = "sd:/apps/wiipeout/";
 	}
-
-	return 0;
+#if !defined(PATH_ASSETS) || !defined(PATH_USERDATA)
+	if (!data_root) {
+		for (int i = 0; i < 20; i++) {
+			if (dvmProbeMountDiscIface("usb", &__io_usbstorage, 4, 64)) {
+				if (platform_data_root_exists("usb:/apps/wiipeout/wipeout")) {
+					data_root = "usb:/apps/wiipeout/";
+				}
+				break;
+			}
+			if (i < 19) usleep(150000);
+		}
+	}
+	if (!data_root) {
+		printf("ERROR: Data directory not found: sd:/apps/wiipeout/wipeout or usb:/apps/wiipeout/wipeout. Press HOME to exit.\n");
+		platform_wii_log_sync();
+		while (!wants_to_exit && !power_requested && !reset_requested) {
+			platform_pump_events();
+			VIDEO_WaitVSync();
+		}
+		platform_log_close();
+		if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+		exit(0);
+	}
+#endif
+#ifdef PATH_ASSETS
+	path_assets = TOSTRING(PATH_ASSETS);
+#else
+	path_assets = (char *)data_root;
+#endif
+#ifdef PATH_USERDATA
+	path_userdata = TOSTRING(PATH_USERDATA);
+#else
+	path_userdata = (char *)data_root;
+#endif
+	printf("Wiipeout: data %s, video %ux%u\n", data_root ? data_root : path_assets,
+		(unsigned int)video_mode->fbWidth, (unsigned int)video_mode->efbHeight);
+	platform_wii_mem_log("boot");
+	if (!wants_to_exit && !power_requested && !reset_requested) {
+		system_init();
+		while (!wants_to_exit && !power_requested && !reset_requested) {
+			platform_pump_events();
+			if (wants_to_exit || power_requested || reset_requested) break;
+			platform_prepare_frame();
+			system_update();
+			platform_end_frame();
+		}
+		system_cleanup();
+	}
+	platform_log_close();
+	if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+	exit(0);
 }
