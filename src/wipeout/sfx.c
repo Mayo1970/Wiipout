@@ -14,6 +14,8 @@
 #include <qoa.h>
 
 #define DOPPLER_SHIFT_INTENSITY (1.0/524288.0)
+// Non-voice effects are 22 kHz (see sfx_get_node).
+#define SFX_SAMPLE_RATE 22050
 
 typedef struct {
 	int16_t *samples;
@@ -194,6 +196,14 @@ sfx_t *sfx_play(sfx_source_t source_index) {
 	sfx_t *sfx = sfx_get_node(source_index);
 	flags_set(sfx->flags, SFX_PLAY);
 	return sfx;
+}
+
+void sfx_wiimote_powerup(void) {
+#ifdef PLATFORM_WII
+	if (!sources) return;
+	sfx_data_t *source = &sources[SFX_POWERUP];
+	platform_wiimote_speaker_play(source->samples, source->len, SFX_SAMPLE_RATE);
+#endif
 }
 
 sfx_t *sfx_play_at(sfx_source_t source_index, vec3_t pos, vec3_t vel, float volume) {

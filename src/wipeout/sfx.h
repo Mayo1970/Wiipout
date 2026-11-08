@@ -67,6 +67,7 @@ void sfx_unpause(void);
 
 sfx_t *sfx_play(sfx_source_t source_index);
 sfx_t *sfx_play_at(sfx_source_t source_index, vec3_t pos, vec3_t vel, float volume);
+void sfx_wiimote_powerup(void);
 sfx_t *sfx_reserve_loop(sfx_source_t source_index);
 void sfx_set_position(sfx_t *sfx, vec3_t pos, vec3_t vel, float volume);
 

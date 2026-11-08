@@ -419,6 +419,7 @@ void ship_update(ship_t *self) {
 	) {
 		if (self->pilot == g.pilot) {
 			sfx_play(SFX_POWERUP);
+			sfx_wiimote_powerup();
 			if (flags_is(self->flags, SHIP_SHIELDED)) {
 				self->weapon_type = weapon_get_random_type(WEAPON_CLASS_PROJECTILE);
 			}
