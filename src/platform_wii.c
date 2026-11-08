@@ -487,7 +487,12 @@ uint8_t *platform_load_asset(const char *name, uint32_t *bytes_read) {
 }
 
 uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
-	char *path = platform_path(path_userdata, name);
+	char path[256];
+	snprintf(path, sizeof(path), "%s%s", path_userdata, name);
+	if (!file_exists(path)) {
+		// A power cut between remove() and rename() in store leaves only the tmp file
+		snprintf(path, sizeof(path), "%s%s.tmp", path_userdata, name);
+	}
 	if (!file_exists(path)) {
 		*bytes_read = 0;
 		platform_wii_log_sync();
@@ -499,9 +504,35 @@ uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
 }
 
 uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
-	uint32_t written = file_store(platform_path(path_userdata, name), bytes, len);
+	char path[256];
+	char tmp[256];
+	snprintf(path, sizeof(path), "%s%s", path_userdata, name);
+	snprintf(tmp, sizeof(tmp), "%s%s.tmp", path_userdata, name);
+
+	FILE *f = fopen(tmp, "wb");
+	if (!f) {
+		printf("save: write failed (open %s)\n", tmp);
+		platform_wii_log_sync();
+		return 0;
+	}
+	size_t written = fwrite(bytes, 1, len, f);
+	int closed = fclose(f);
+	if (written != (size_t)len || closed != 0) {
+		remove(tmp);
+		printf("save: write failed (write %s)\n", tmp);
+		platform_wii_log_sync();
+		return 0;
+	}
+
+	// FAT rename does not overwrite an existing file
+	remove(path);
+	if (rename(tmp, path) != 0) {
+		printf("save: write failed (rename %s)\n", tmp);
+		platform_wii_log_sync();
+		return 0;
+	}
 	platform_wii_log_sync();
-	return written;
+	return len;
 }
 
 static void platform_video_init(void) {
