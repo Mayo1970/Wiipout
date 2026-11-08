@@ -1,10 +1,10 @@
 #!/bin/sh
 # Boot the smoke build in Dolphin with an SD image that holds wipeout/, then check the SD log.
-# Usage: tools/dolphin_smoke/run.sh [path/to/Dolphin.exe]. SMOKE_TIMEOUT sets the limit in seconds.
+# Usage: tools/dolphin_smoke/run.sh [path/to/Dolphin.exe]. SMOKE_TIMEOUT sets the limit in seconds, SMOKE_DUMP=1 dumps frames as PNG.
 set -eu
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DOLPHIN="${1:-${DOLPHIN:-Dolphin.exe}}"
-TIMEOUT="${SMOKE_TIMEOUT:-300}"
+TIMEOUT="${SMOKE_TIMEOUT:-420}"
 OUT="$ROOT/build/wii-smoke/dolphin"
 IMG=build/wii-smoke/dolphin/sd.raw
 CTR=wpo-smoke-mtools
@@ -13,6 +13,11 @@ CTR=wpo-smoke-mtools
 rm -rf "$OUT"
 mkdir -p "$OUT/user/Config"
 printf '[Analytics]\nPermissionAsked = True\nEnabled = False\n' > "$OUT/user/Config/Dolphin.ini"
+DUMP_ARGS=""
+if [ "${SMOKE_DUMP:-0}" = 1 ]; then
+	printf '[Settings]\nDumpFramesAsImages = True\n' > "$OUT/user/Config/GFX.ini"
+	DUMP_ARGS="-C Dolphin.Movie.DumpFrames=True"
+fi
 
 docker rm -f "$CTR" >/dev/null 2>&1 || true
 MSYS_NO_PATHCONV=1 docker run -d --name "$CTR" -e DEBIAN_FRONTEND=noninteractive -v "$ROOT:/src" -w /src debian:bookworm sleep infinity >/dev/null
@@ -30,6 +35,7 @@ mcopy -s -i $IMG wipeout ::/apps/wiipeout/
 # Dolphin locks the image while it runs; the smoke build powers off when done, which ends batch mode.
 WIN_OUT="$(cygpath -w "$OUT")"
 "$DOLPHIN" -u "$WIN_OUT\\user" -b \
+	$DUMP_ARGS \
 	-C "Dolphin.Core.WiiSDCard=True" \
 	-C "Dolphin.Core.WiiSDCardEnableFolderSync=False" \
 	-C "Dolphin.General.WiiSDCardPath=$WIN_OUT\\sd.raw" \
