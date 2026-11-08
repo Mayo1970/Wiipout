@@ -120,14 +120,15 @@ static void platform_smoke_update(void) {
 	if (smoke_race_seen && smoke_frame - smoke_race_frame >= 300) {
 		printf("SMOKE PASS: main menu and race reached, frame %u\n", (unsigned int)smoke_frame);
 		platform_wii_log_sync();
-		platform_exit();
+		// Power off, not exit: Dolphin then stops emulation and flushes the SD image.
+		power_requested = true;
 		return;
 	}
 	// Reached only while the race has not passed yet, so a late race also times out.
 	if (smoke_frame >= 60 * 180) {
 		printf("SMOKE FAIL: timeout, menu=%d race=%d\n", smoke_menu_seen, smoke_race_seen);
 		platform_wii_log_sync();
-		platform_exit();
+		power_requested = true;
 	}
 }
 #endif
