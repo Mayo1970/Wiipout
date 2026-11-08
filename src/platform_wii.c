@@ -218,6 +218,7 @@ static void platform_pad_joystick(float *pad, joystick_t *stick, bool right) {
 static void platform_rumble_off(void) {
 	rumble_strength = 0;
 	rumble_acc = 0;
+	if (!rumble_on) return;
 	WPAD_Rumble(WPAD_CHAN_0, 0);
 	PAD_ControlMotor(PAD_CHAN0, PAD_MOTOR_STOP_HARD);
 	rumble_on = false;
