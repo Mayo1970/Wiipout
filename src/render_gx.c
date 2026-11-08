@@ -158,6 +158,11 @@ static void render_flush(void) {
 	GX_End();
 #ifdef WII_DIAG
 	diag_batch_record(positions, uvs, count, texture);
+#else
+	static u16 token;
+	// A draw sync token after every batch prevented a GPU hang on hardware (WPO-23).
+	if (++token == 0) token = 1;
+	GX_SetDrawSync(token);
 #endif
 	running_stats.num_tris += tris_len;
 	running_stats.num_draw_calls++;
