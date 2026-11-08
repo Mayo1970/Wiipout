@@ -39,8 +39,8 @@ endif
 # Renderer ---------------------------------------------------------------------
 
 ifeq ($(PLATFORM),WII)
-	RENDERER_SRC = src/render_null.c
-	C_FLAGS := $(C_FLAGS) -DRENDERER_NULL
+	RENDERER_SRC = src/render_gx.c
+	C_FLAGS := $(C_FLAGS) -DRENDERER_GX
 else ifeq ($(RENDERER), GL)
 	RENDERER_SRC = src/render_gl.c
 	C_FLAGS := $(C_FLAGS) -DRENDERER_GL
