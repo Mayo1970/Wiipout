@@ -26,6 +26,10 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #ifdef WII_SMOKE
 #include <string.h>
 #include "input.h"
+#include "wipeout/game.h"
+#include "wipeout/ship.h"
+#include "wipeout/ship_ai.h"
+#include "wipeout/ship_player.h"
 #endif
 
 static GXRModeObj *video_mode;
@@ -51,6 +55,8 @@ static u32 smoke_frame;
 static bool smoke_menu_seen;
 static bool smoke_race_seen;
 static u32 smoke_race_frame;
+static bool smoke_lap_done;
+static u32 smoke_lap_frame;
 #endif
 
 static ssize_t platform_log_write(const devoptab_t *console, struct _reent *reent, void *fd, const char *buffer, size_t len) {
@@ -139,16 +145,30 @@ static void platform_smoke_update(void) {
 	// The release is always sent so RETURN is never left held when the race loads.
 	if (!smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
 	if (smoke_frame % 30 == 1) input_set_button_state(INPUT_KEY_RETURN, 0.0f);
-	if (smoke_race_seen && smoke_frame - smoke_race_frame >= 300) {
-		printf("SMOKE PASS: main menu and race reached, frame %u\n", (unsigned int)smoke_frame);
-		platform_wii_log_sync();
-		// Power off, not exit: Dolphin then stops emulation and flushes the SD image.
-		power_requested = true;
-		return;
+	if (smoke_race_seen) {
+		ship_t *ship = &g.ships[g.pilot];
+		// AI drives the player ship; flags stay untouched so the HUD still draws.
+		if (ship->update_func == ship_player_update_race) {
+			ship->update_func = ship_ai_update_race;
+			printf("SMOKE autopilot frame %u\n", (unsigned int)smoke_frame);
+		}
+		if (!smoke_lap_done && ship->max_lap >= 1) {
+			smoke_lap_done = true;
+			smoke_lap_frame = smoke_frame;
+			printf("SMOKE lap 1 done frame %u\n", (unsigned int)smoke_frame);
+		}
+		if (smoke_lap_done && smoke_frame - smoke_lap_frame >= 120) {
+			printf("SMOKE PASS: menu, race and first lap reached, frame %u\n", (unsigned int)smoke_frame);
+			platform_wii_log_sync();
+			// Power off, not exit: Dolphin then stops emulation and flushes the SD image.
+			power_requested = true;
+			return;
+		}
 	}
 	// Reached only while the race has not passed yet, so a late race also times out.
-	if (smoke_frame >= 60 * 180) {
-		printf("SMOKE FAIL: timeout, menu=%d race=%d\n", smoke_menu_seen, smoke_race_seen);
+	if (smoke_frame >= 60 * 360) {
+		printf("SMOKE FAIL: timeout, menu=%d race=%d lap=%d\n", smoke_menu_seen, smoke_race_seen,
+			smoke_race_seen ? g.ships[g.pilot].max_lap : -1);
 		platform_wii_log_sync();
 		power_requested = true;
 	}
