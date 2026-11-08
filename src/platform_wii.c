@@ -127,11 +127,28 @@ static void platform_audio_shutdown(void) {
 
 #ifdef WII_SMOKE
 static u32 smoke_frame;
+#ifdef WII_SMOKE_INTRO
+static bool smoke_intro_seen;
+static double smoke_intro_start;
+static double smoke_intro_last;
+static double smoke_intro_max;
+static u32 smoke_intro_frames;
+static u32 smoke_intro_over40;
+
+static void platform_smoke_intro_sample(double now) {
+	double delta = now - smoke_intro_last;
+	smoke_intro_last = now;
+	smoke_intro_frames++;
+	if (delta > smoke_intro_max) smoke_intro_max = delta;
+	if (delta > 0.040) smoke_intro_over40++;
+}
+#else
 static bool smoke_menu_seen;
 static bool smoke_race_seen;
 static u32 smoke_race_frame;
 static bool smoke_lap_done;
 static u32 smoke_lap_frame;
+#endif
 #endif
 
 static ssize_t platform_log_write(const devoptab_t *console, struct _reent *reent, void *fd, const char *buffer, size_t len) {
@@ -216,6 +233,14 @@ static void platform_reset_callback(u32 irq, void *context) {
 #ifdef WII_SMOKE
 static void platform_smoke_update(void) {
 	smoke_frame++;
+#ifdef WII_SMOKE_INTRO
+	// Time, not frames: the GX loop has no vsync wait, so frame counts say nothing about duration.
+	if (smoke_intro_seen && platform_now() - smoke_intro_start >= 240.0) {
+		printf("SMOKE FAIL: intro timeout\n");
+		platform_wii_log_sync();
+		power_requested = true;
+	}
+#else
 	// RETURN confirms menu pages; tapping every 30 frames makes each press a new edge.
 	// The release is always sent so RETURN is never left held when the race loads.
 	if (!smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
@@ -247,6 +272,7 @@ static void platform_smoke_update(void) {
 		platform_wii_log_sync();
 		power_requested = true;
 	}
+#endif
 }
 #endif
 
@@ -396,6 +422,9 @@ static void platform_end_frame(void) {
 #if defined(RENDERER_NULL)
 	VIDEO_WaitVSync();
 #endif
+#if defined(WII_SMOKE) && defined(WII_SMOKE_INTRO)
+	if (smoke_intro_seen) platform_smoke_intro_sample(platform_now());
+#endif
 }
 
 static bool platform_data_root_exists(const char *path) {
@@ -505,11 +534,30 @@ void platform_wii_mem_log(const char *tag) {
 		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
 		heap, mem1, mem2, low);
 #ifdef WII_SMOKE
+#ifdef WII_SMOKE_INTRO
+	if (strcmp(tag, "intro") == 0) {
+		smoke_intro_seen = true;
+		smoke_intro_start = smoke_intro_last = platform_now();
+	}
+	else if (strcmp(tag, "title") == 0 && smoke_intro_seen) {
+		double now = platform_now();
+		double wall = now - smoke_intro_start;
+		platform_smoke_intro_sample(now);
+		smoke_intro_seen = false;
+		printf("SMOKE intro wall=%.2fs frames=%u avg=%.2fms max=%.2fms over40=%u\n",
+			wall, (unsigned int)smoke_intro_frames, wall * 1000.0 / smoke_intro_frames,
+			smoke_intro_max * 1000.0, (unsigned int)smoke_intro_over40);
+		printf(wall <= 93.68 * 1.05 ? "SMOKE PASS: intro full speed\n" : "SMOKE FAIL: intro slow\n");
+		platform_wii_log_sync();
+		power_requested = true;
+	}
+#else
 	if (strcmp(tag, "menu") == 0) smoke_menu_seen = true;
 	if (strcmp(tag, "race") == 0 && smoke_menu_seen) {
 		smoke_race_seen = true;
 		smoke_race_frame = smoke_frame;
 	}
+#endif
 	printf("SMOKE scene %s frame %u\n", tag, (unsigned int)smoke_frame);
 #endif
 }
