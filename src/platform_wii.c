@@ -146,8 +146,16 @@ static void platform_smoke_intro_sample(double now) {
 static bool smoke_menu_seen;
 static bool smoke_race_seen;
 static u32 smoke_race_frame;
+#ifdef WII_SMOKE_FULL
+static bool smoke_full_intro_seen;
+static bool smoke_full_title_seen;
+static bool smoke_finish_done;
+static bool smoke_finish_results;
+static u32 smoke_finish_frame;
+#else
 static bool smoke_lap_done;
 static u32 smoke_lap_frame;
+#endif
 #endif
 #endif
 
@@ -241,9 +249,24 @@ static void platform_smoke_update(void) {
 		power_requested = true;
 	}
 #else
+#ifdef WII_SMOKE_FULL
+	// Time, not frames: the GX loop has no vsync wait, so frame counts say nothing about duration.
+	if (platform_now() >= 900.0) {
+		printf("SMOKE FAIL: timeout, intro=%d title=%d menu=%d race=%d lap=%d\n", smoke_full_intro_seen,
+			smoke_full_title_seen, smoke_menu_seen, smoke_race_seen,
+			smoke_race_seen ? g.ships[g.pilot].max_lap : -1);
+		platform_wii_log_sync();
+		power_requested = true;
+		return;
+	}
+	// RETURN before the title would skip the intro, so the full smoke waits for it to end.
+	bool return_ready = smoke_full_title_seen;
+#else
+	bool return_ready = true;
+#endif
 	// RETURN confirms menu pages; tapping every 30 frames makes each press a new edge.
 	// The release is always sent so RETURN is never left held when the race loads.
-	if (!smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
+	if (return_ready && !smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
 	if (smoke_frame % 30 == 1) input_set_button_state(INPUT_KEY_RETURN, 0.0f);
 	if (smoke_race_seen) {
 		ship_t *ship = &g.ships[g.pilot];
@@ -252,6 +275,24 @@ static void platform_smoke_update(void) {
 			ship->update_func = ship_ai_update_race;
 			printf("SMOKE autopilot frame %u\n", (unsigned int)smoke_frame);
 		}
+#ifdef WII_SMOKE_FULL
+		if (!smoke_finish_done && ship->max_lap >= NUM_LAPS) {
+			smoke_finish_done = true;
+			smoke_finish_frame = smoke_frame;
+			smoke_finish_results = flags_not(ship->flags, SHIP_RACING);
+			printf("SMOKE race finished frame %u, results=%d\n", (unsigned int)smoke_frame, smoke_finish_results);
+		}
+		if (smoke_finish_done && smoke_frame - smoke_finish_frame >= 180) {
+			if (smoke_finish_results) {
+				printf("SMOKE PASS: intro, menu, race, finish and results reached, frame %u\n", (unsigned int)smoke_frame);
+			} else {
+				printf("SMOKE FAIL: no results screen\n");
+			}
+			platform_wii_log_sync();
+			power_requested = true;
+			return;
+		}
+#else
 		if (!smoke_lap_done && ship->max_lap >= 1) {
 			smoke_lap_done = true;
 			smoke_lap_frame = smoke_frame;
@@ -264,7 +305,9 @@ static void platform_smoke_update(void) {
 			power_requested = true;
 			return;
 		}
+#endif
 	}
+#ifndef WII_SMOKE_FULL
 	// Reached only while the race has not passed yet, so a late race also times out.
 	if (smoke_frame >= 60 * 360) {
 		printf("SMOKE FAIL: timeout, menu=%d race=%d lap=%d\n", smoke_menu_seen, smoke_race_seen,
@@ -272,6 +315,7 @@ static void platform_smoke_update(void) {
 		platform_wii_log_sync();
 		power_requested = true;
 	}
+#endif
 #endif
 }
 #endif
@@ -583,6 +627,10 @@ void platform_wii_mem_log(const char *tag) {
 		power_requested = true;
 	}
 #else
+#ifdef WII_SMOKE_FULL
+	if (strcmp(tag, "intro") == 0) smoke_full_intro_seen = true;
+	if (strcmp(tag, "title") == 0 && smoke_full_intro_seen) smoke_full_title_seen = true;
+#endif
 	if (strcmp(tag, "menu") == 0) smoke_menu_seen = true;
 	if (strcmp(tag, "race") == 0 && smoke_menu_seen) {
 		smoke_race_seen = true;
