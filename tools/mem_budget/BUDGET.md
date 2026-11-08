@@ -15,6 +15,7 @@ The host run is 32-bit (`gcc -m32`), so pointer and struct sizes match the Wii.
 | Music decoder buffers | 45,096 | MEM2 hunk (in the bump figures) |
 | Textures at menu, RGBA8888 / 16 bpp | 3,472,120 / 1,736,060 (145 textures) | renderer, MEM1 heap (WPO-11) |
 | Textures, largest race, RGBA8888 / 16 bpp | 5,297,376 / 2,648,688 (circuit 5) | renderer, MEM1 heap (WPO-11) |
+| GX vertex arena | 524,288 | MEM1 heap |
 | malloc peak (cJSON save write) | 9,086 | MEM1 heap |
 | boot.elf text / data / bss | 261,338 / 56,484 / 645,408 | MEM1 |
 | Main stack (`__ppc_main_sp`, in bss) | 262,144 | MEM1 |
@@ -29,7 +30,7 @@ The intro (pl_mpeg) scene is not measured. Its buffers go to the hunk through `m
 ## Headroom
 
 - Hunk: the peak is 3.2 MB of 16 MB. About 13.5 MB is free. A smaller hunk is possible later.
-- MEM1: static use is about 1 MB of 24 MB. With textures, XFBs and the FIFO, about 19 MB stays free.
+- MEM1: static use is about 1 MB of 24 MB. With textures, XFBs and the FIFO, about 18.5 MB stays free.
 - Nothing is over budget.
 
 ## Open points
