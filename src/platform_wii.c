@@ -814,7 +814,8 @@ static void diag_frame_done(void) {
 wii_profile_frame_t wii_profile_frame;
 typedef struct {
 	wii_profile_frame_t sum, worst;
-	uint64_t frames, missed_vsyncs, missed_frames;
+	uint64_t frames, missed_vsyncs, missed_frames, log_sync_vsyncs, log_sync_frames;
+	bool has_worst;
 	double frame_ms, frame_max, update_max, submit_max, wait_max;
 	double vsync_wait_max, work_ms, work_max;
 	double sim_rumble_max, sim_particles_max, sim_scene_max, sim_map_max, sim_pickups_max;
@@ -822,9 +823,11 @@ typedef struct {
 } profile_stats_t;
 static profile_stats_t profile_window, profile_total;
 static double profile_start;
+static bool profile_after_log_sync;
 
 static void profile_accumulate(profile_stats_t *s, double frame_ms) {
-	if (!s->frames || s->frame_max < frame_ms) {
+	if (!profile_after_log_sync && (!s->has_worst || s->frame_max < frame_ms)) {
+		s->has_worst = true;
 		s->frame_max = frame_ms;
 		s->worst = wii_profile_frame;
 	}
@@ -835,8 +838,14 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 	if (s->work_max < work_ms) s->work_max = work_ms;
 	s->sum.vsync_wait_ms += wii_profile_frame.vsync_wait_ms;
 	if (s->vsync_wait_max < wii_profile_frame.vsync_wait_ms) s->vsync_wait_max = wii_profile_frame.vsync_wait_ms;
-	s->missed_vsyncs += wii_profile_frame.missed;
-	s->missed_frames += wii_profile_frame.missed > 0;
+	if (profile_after_log_sync) {
+		s->log_sync_vsyncs += wii_profile_frame.missed;
+		s->log_sync_frames += wii_profile_frame.missed > 0;
+	}
+	else {
+		s->missed_vsyncs += wii_profile_frame.missed;
+		s->missed_frames += wii_profile_frame.missed > 0;
+	}
 	s->sum.update_ms += wii_profile_frame.update_ms;
 	if (s->update_max < wii_profile_frame.update_ms) s->update_max = wii_profile_frame.update_ms;
 	s->sum.submit_ms += wii_profile_frame.submit_ms;
@@ -942,7 +951,7 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" uploads=%llu"
 		" replacements=%llu"
 		" arena_peak=%llu"
-		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
+		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu log_sync_vsyncs=%llu log_sync_frames=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
 		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
 		s->sum.wait_ms / s->frames, s->wait_max,
 		s->sum.sim_ships_ms / s->frames, s->sim_ships_max,
@@ -985,11 +994,12 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)s->sum.replacements,
 		(unsigned long long)s->sum.arena_peak,
 		s->sum.vsync_wait_ms / s->frames, s->vsync_wait_max, s->work_ms / s->frames, s->work_max,
-		(unsigned long long)s->missed_vsyncs, (unsigned long long)s->missed_frames);
+		(unsigned long long)s->missed_vsyncs, (unsigned long long)s->missed_frames,
+		(unsigned long long)s->log_sync_vsyncs, (unsigned long long)s->log_sync_frames);
 }
 
 static void profile_print_worst(const char *kind, const profile_stats_t *s) {
-	if (!s->frames) return;
+	if (!s->has_worst) return;
 	const wii_profile_frame_t *f = &s->worst;
 	printf("PROF %s frame_ms=%.3f update_ms=%.3f submit_ms=%.3f wait_ms=%.3f"
 		" sim_ships_ms=%.3f sim_droid_ms=%.3f sim_camera_ms=%.3f sim_weapons_ms=%.3f"
@@ -1054,10 +1064,12 @@ void wii_profile_end(void) {
 	double elapsed = (platform_now() - profile_start) * 1000.0;
 	profile_accumulate(&profile_window, elapsed);
 	profile_accumulate(&profile_total, elapsed);
+	profile_after_log_sync = false;
 	if (profile_window.frames == WII_PROFILE_WINDOW) {
 		profile_print("window", &profile_window);
 		profile_print_worst("worst", &profile_window);
 		platform_wii_log_sync();
+		profile_after_log_sync = true;
 		memset(&profile_window, 0, sizeof(profile_window));
 	}
 #if defined(WII_SMOKE) && !defined(WII_SMOKE_INTRO) && defined(WII_PROFILE_FRAMES) && WII_PROFILE_FRAMES > 0
