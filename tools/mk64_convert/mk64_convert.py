@@ -14,6 +14,11 @@ SCALE = 16.0
 ROAD_WIDTH = 3500.0
 SPACING = 1744.0
 OVERLAP_OFFSET = 8.0
+CROSS_SLOPE_LIMIT = math.tan(math.radians(20))
+PLANE_SAMPLE_OFFSET = 700.0
+PLANE_TOLERANCE = 120.0
+CEILING_HEIGHT = 1200.0
+SLOPE_LOOKAHEAD = 64
 VERTEX = re.compile(r'\{\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*,\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*,\s*\{\s*MACRO_COLOR_FLAG\(([^)]*)\)\s*,\s*([^}]+)\}')
 ARRAY = re.compile(r'\bGfx\s+(\w+)\s*\[\s*\]\s*=\s*\{(.*?)\};', re.S)
 COMMAND = re.compile(r'\b(gsSPVertex|gsSP1Triangle|gsSP2Triangles|gsSPDisplayList|gsDPSetTextureImage|gsDPSetTile|gsDPSetTileSize|gsSPTexture|gsDPSetCombineMode)\s*\(([^()]*)\)')
@@ -94,6 +99,22 @@ def read_source(root, course):
             walk(name, {}, [None]*32, set())
     if not triangles:
         raise ValueError('no display-list triangles found')
+    scene_triangles = triangles
+    triangles, seen = [], set()
+    collision_table = re.search(r'TrackSections\s+d_course_' + re.escape(course) + r'_(?:addr|track_sections)\s*\[\s*\]\s*=\s*\{(.*?)\};', data, re.S)
+    if not collision_table:
+        raise ValueError('collision display-list table not found')
+    for name, surface in re.findall(r'\{\s*(\w+)\s*,\s*(\w+)\s*,\s*[^,]+,\s*[^}]+\}', collision_table.group(1)):
+        if name in ('0', '0x00000000', 'NULL'):
+            break
+        if name not in arrays:
+            raise ValueError(f'collision display list not found: {name}')
+        seen = set()
+        walk(name, {'surface': surface}, [None]*32, set())
+    collision_triangles = triangles
+    triangles = scene_triangles
+    if not collision_triangles:
+        raise ValueError('no collision triangles found')
     table = (root / 'assets/course_metadata/gCoursePathTable.inc.c').read_text()
     prefix = 'd_course_' + course + '_track_path'
     entry = re.search(r'\{\s*' + re.escape(prefix) + r'\s*,([^}]*)\}', table)
@@ -127,7 +148,7 @@ def read_source(root, course):
         boxes.append((x, y, z, group))
     else:
         raise ValueError('item boxes have no terminator')
-    return vertices, triangles, paths, boxes
+    return vertices, triangles, collision_triangles, paths, boxes
 
 
 def dedupe(vertices, triangles):
@@ -352,7 +373,199 @@ def open_samples(points, scale):
     return result
 
 
-def road(points, scale, branch_points=(), boxes=()):
+class CollisionMesh:
+    def __init__(self, vertices, triangles, scenery):
+        self.floors, self.walls = [], []
+        self.grid = defaultdict(list)
+        self.overhead = defaultdict(list)
+        for indices, _ in scenery + triangles:
+            p = tuple(vertices[i][0] for i in indices)
+            a, b, c = p
+            den = (b[2]-c[2])*(a[0]-c[0]) + (c[0]-b[0])*(a[2]-c[2])
+            if not den:
+                continue
+            for x in range(math.floor(min(q[0] for q in p)/256), math.floor(max(q[0] for q in p)/256)+1):
+                for z in range(math.floor(min(q[2] for q in p)/256), math.floor(max(q[2] for q in p)/256)+1):
+                    self.overhead[x, z].append((p, den))
+        for indices, state in triangles:
+            p = tuple(vertices[i][0] for i in indices)
+            a, b, c = p
+            u = tuple(b[i]-a[i] for i in range(3))
+            v = tuple(c[i]-a[i] for i in range(3))
+            n = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+            if not any(n):
+                continue
+            # MK64 assigns the collision axis from the largest normal component.
+            if abs(n[1]) >= max(abs(n[0]), abs(n[2])):
+                if n[1] <= 0:
+                    continue
+                record = (p, state['surface'])
+                self.floors.append(record)
+                for x in range(math.floor(min(q[0] for q in p)/256), math.floor(max(q[0] for q in p)/256)+1):
+                    for z in range(math.floor(min(q[2] for q in p)/256), math.floor(max(q[2] for q in p)/256)+1):
+                        self.grid[x, z].append(record)
+            else:
+                self.walls.append(p)
+
+    def floor(self, x, y, z):
+        hits = []
+        for (a, b, c), surface in self.grid[math.floor(x/256), math.floor(z/256)]:
+            den = (b[2]-c[2])*(a[0]-c[0]) + (c[0]-b[0])*(a[2]-c[2])
+            if not den:
+                continue
+            u = ((b[2]-c[2])*(x-c[0]) + (c[0]-b[0])*(z-c[2]))/den
+            v = ((c[2]-a[2])*(x-c[0]) + (a[0]-c[0])*(z-c[2]))/den
+            if u >= -1e-7 and v >= -1e-7 and u+v <= 1.0000001:
+                h = u*a[1]+v*b[1]+(1-u-v)*c[1]
+                if abs(h-y) <= 80:
+                    hits.append((abs(h-y), h, surface))
+        if not hits:
+            return None
+        _, h, surface = min(hits)
+        return None if surface == 'OUT_OF_BOUNDS' else h
+
+    def ceiling(self, x, y, z, height):
+        ground = self.floor(x, y, z)
+        lower = max(y, ground if ground is not None else y) + 2
+        for (a, b, c), den in self.overhead[math.floor(x/256), math.floor(z/256)]:
+            u = ((b[2]-c[2])*(x-c[0]) + (c[0]-b[0])*(z-c[2]))/den
+            v = ((c[2]-a[2])*(x-c[0]) + (a[0]-c[0])*(z-c[2]))/den
+            if u >= -1e-7 and v >= -1e-7 and u+v <= 1.0000001:
+                h = u*a[1]+v*b[1]+(1-u-v)*c[1]
+                if lower < h < y+height:
+                    return True
+        return False
+
+    def plane(self, origin, direction, scale):
+        x, y, z = origin
+        center = self.floor(x, y, z)
+        center = y if center is None else center
+        offset = PLANE_SAMPLE_OFFSET/scale
+        heights = [self.floor(x+direction[0]*sign*offset, center, z+direction[1]*sign*offset)
+                   for sign in (-1, 1)]
+        if all(h is not None for h in heights):
+            slope = (heights[1]-heights[0])/(2*offset)
+        elif heights[0] is not None:
+            slope = (center-heights[0])/offset
+        elif heights[1] is not None:
+            slope = (heights[1]-center)/offset
+        else:
+            slope = 0
+        return center, max(-CROSS_SLOPE_LIMIT, min(CROSS_SLOPE_LIMIT, slope))
+
+    def edge(self, origin, direction, sign, center, slope, scale):
+        x, y, z = origin
+        dx, dz = direction[0]*sign, direction[1]*sign
+        wall_hits = []
+        for tri in self.walls:
+            cuts = []
+            for a, b in zip(tri, tri[1:]+tri[:1]):
+                da = (a[0]-x)*dz-(a[2]-z)*dx
+                db = (b[0]-x)*dz-(b[2]-z)*dx
+                if (da <= 0 <= db or db <= 0 <= da) and abs(da-db) > 1e-9:
+                    t = da/(da-db)
+                    q = tuple(a[k]+t*(b[k]-a[k]) for k in range(3))
+                    cuts.append(((q[0]-x)*dx+(q[2]-z)*dz, q[1]))
+            if len(cuts) < 2:
+                continue
+            lo, hi = sorted(cuts)[:2]
+            if hi[0] < 0 or lo[0] > 400:
+                continue
+            d = max(0, lo[0])
+            ground = self.floor(x+dx*d, y, z+dz*d)
+            ground = y if ground is None else ground
+            if max(lo[1], hi[1]) > ground+2 and min(lo[1], hi[1]) < ground+60:
+                wall_hits.append((d, max(lo[1], hi[1])))
+        distance = min((hit[0] for hit in wall_hits), default=math.inf)
+        top = max((hit[1] for hit in wall_hits if hit[0] <= distance+1), default=y+500/16)
+        wall = distance, top
+        last = self.floor(x, y, z)
+        if last is None:
+            last = y
+        for d in range(4, 401, 4):
+            if wall[0] <= d:
+                return wall[0], 'wall', wall[1]
+            h = self.floor(x+dx*d, last, z+dz*d)
+            if h is None:
+                return d-4, 'floor', last+500/16
+            if abs(h-(center+slope*sign*d)) > PLANE_TOLERANCE/scale:
+                top = max([h] + [hit[1] for hit in wall_hits if d-4 <= hit[0] <= d+SLOPE_LOOKAHEAD])
+                probe = h
+                for ahead in range(d+4, min(400, d+SLOPE_LOOKAHEAD)+1, 4):
+                    probe = self.floor(x+dx*ahead, probe, z+dz*ahead)
+                    if probe is None:
+                        break
+                    top = max(top, probe)
+                return d-4, 'plane', top
+            last = h
+        return 400, 'cap', last+500/16
+
+    def report(self, samples, scale):
+        slopes = sorted(abs(math.degrees(math.atan(row[4]))) for row in samples)
+        mid = len(slopes)//2
+        median = (slopes[mid]+slopes[~mid])/2
+        ceilings = 0
+        for origin, direction, edges, center, slope in samples:
+            left, right = edges[0][0], edges[1][0]
+            count = max(1, math.ceil((left+right)/16))
+            if any(self.ceiling(origin[0]+direction[0]*d, center+slope*d,
+                                origin[2]+direction[1]*d, CEILING_HEIGHT/scale)
+                   for d in (-left+(left+right)*i/count for i in range(count+1))):
+                ceilings += 1
+        print(f'  cross-slope max/median: {slopes[-1]:.2f}/{median:.2f} degrees; ceiling rows: {ceilings}')
+        for j, name in enumerate(('left', 'right')):
+            widths = sorted(row[2][j][0]*scale for row in samples)
+            counts = defaultdict(int)
+            for row in samples:
+                counts[row[2][j][1]] += 1
+            mid = len(widths)//2
+            median = (widths[mid]+widths[~mid])/2
+            print(f'  {name} width min/median/max: {widths[0]:.0f}/{median:.0f}/{widths[-1]:.0f}; wall/floor/plane/cap: {counts["wall"]}/{counts["floor"]}/{counts["plane"]}/{counts["cap"]}')
+
+    def debug(self, path, rows, links, scale, samples):
+        size = 1024
+        points = [p for tri, _ in self.floors for p in tri]
+        points += [p for tri in self.walls for p in tri]
+        minx, maxx = min(p[0] for p in points), max(p[0] for p in points)
+        minz, maxz = min(p[2] for p in points), max(p[2] for p in points)
+        factor = (size-20)/max(maxx-minx, maxz-minz, 1)
+        def xy(p):
+            return (round((p[0]-minx)*factor)+10, round((p[2]-minz)*factor)+10)
+        pixels = bytearray([255, 255, 255])*(size*size)
+        def line(a, b, color):
+            x0, y0 = a
+            x1, y1 = b
+            steps = max(abs(x1-x0), abs(y1-y0), 1)
+            for i in range(steps+1):
+                x, y = round(x0+(x1-x0)*i/steps), round(y0+(y1-y0)*i/steps)
+                if 0 <= x < size and 0 <= y < size:
+                    pixels[(y*size+x)*3:(y*size+x)*3+3] = bytes(color)
+        for tri, _ in self.floors:
+            p = [xy(q) for q in tri]
+            for y in range(max(0, min(q[1] for q in p)), min(size-1, max(q[1] for q in p))+1):
+                cuts = []
+                for a, b in zip(p, p[1:]+p[:1]):
+                    if a[1] != b[1] and min(a[1], b[1]) <= y <= max(a[1], b[1]):
+                        cuts.append(round(a[0]+(b[0]-a[0])*(y-a[1])/(b[1]-a[1])))
+                if len(cuts) >= 2:
+                    line((min(cuts), y), (max(cuts), y), (200, 200, 200))
+        for tri in self.walls:
+            p = [xy(q) for q in tri]
+            for a, b in zip(p, p[1:]+p[:1]): line(a, b, (220, 30, 30))
+        for i, row in enumerate(rows):
+            for j, color in ((1, (0, 60, 255)), (3, (0, 170, 40))):
+                if samples[i][2][0 if j == 1 else 1][1] == 'plane':
+                    color = (255, 140, 0)
+                a, b = row[j], rows[links[i][2]][j]
+                line(xy((a[0]/scale, 0, -a[2]/scale)), xy((b[0]/scale, 0, -b[2]/scale)), color)
+        raw = b''.join(b'\0'+pixels[y*size*3:(y+1)*size*3] for y in range(size))
+        def chunk(kind, data):
+            return struct.pack('>I', len(data))+kind+data+struct.pack('>I', zlib.crc32(kind+data))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))+chunk(b'IDAT', zlib.compress(raw))+chunk(b'IEND', b''))
+
+
+def road(points, scale, mesh, branch_points=(), boxes=()):
     centers = [(x * scale, -y * scale, -z * scale) for x, y, z in points]
     main_count = len(centers)
     links = [[-1, (i-1) % main_count, (i+1) % main_count, 0] for i in range(main_count)]
@@ -366,7 +579,7 @@ def road(points, scale, branch_points=(), boxes=()):
         for i in (end-1, end): links[i][0] = last
     if len(centers) * 5 > 32767 or len(centers) * 4 > 32767:
         raise ValueError('track exceeds signed 16-bit vertex/face index limits')
-    rows = []
+    rows, samples = [], []
     for i, p in enumerate(centers):
         prev, nxt = centers[links[i][1]], centers[links[i][2]]
         dx, dz = nxt[0]-prev[0], nxt[2]-prev[2]
@@ -374,9 +587,32 @@ def road(points, scale, branch_points=(), boxes=()):
         if length < 1e-6:
             raise ValueError(f'path direction undefined at section {i}')
         side = (dz / length, -dx / length)
+        origin = (p[0]/scale, -p[1]/scale, -p[2]/scale)
+        direction = (side[0], -side[1])
+        center_y, slope = mesh.plane(origin, direction, scale)
+        samples.append((origin, direction, [mesh.edge(origin, direction, sign, center_y, slope, scale)
+                                            for sign in (-1, 1)], center_y, slope))
+    widths = [[edge[0] for edge in sample[2]] for sample in samples]
+    for i, (origin, direction, edges, center_y, slope) in enumerate(samples):
         row = []
-        for offset, elevation in [(-ROAD_WIDTH/2, -500), (-ROAD_WIDTH/2, 0), (0, 0), (ROAD_WIDTH/2, 0), (ROAD_WIDTH/2, -500)]:
-            row.append(tuple(round(v) for v in (p[0]+side[0]*offset, p[1]+elevation, p[2]+side[1]*offset)))
+        for j, sign in enumerate((-1, 1)):
+            width, reason, top = edges[j]
+            neighbours = [widths[k][j] for k in (links[i][1], i, links[i][2])]
+            smooth = sorted(neighbours)[1]
+            width = min(width, smooth)
+            width = max(20, width)
+            x, z = origin[0]+direction[0]*sign*width, origin[2]+direction[1]*sign*width
+            height = center_y+slope*sign*width
+            edge = (round(x*scale), round(-height*scale), round(-z*scale))
+            raw_height = mesh.floor(x, center_y, z)
+            raw_height = height if raw_height is None else raw_height
+            wall_height = max(500, round((top-height)*scale), round((raw_height-height)*scale)+500)
+            wall = (edge[0], edge[1]-wall_height, edge[2])
+            if j == 0:
+                row.extend((wall, edge, (round(origin[0]*scale), round(-center_y*scale), round(-origin[2]*scale))))
+            else:
+                row.extend((edge, wall))
+            edges[j] = (width, reason, top)
         rows.append(row)
     pickup_faces = set()
     for x, y, z, group in boxes:
@@ -403,7 +639,7 @@ def road(points, scale, branch_points=(), boxes=()):
         struct.pack_into('>hh', section, 142, i*4, 4)
         struct.pack_into('>h', section, 150, links[i][3])
         trs.extend(section)
-    return trv, bytes(trf), bytes(trs), pickup_faces
+    return trv, bytes(trf), bytes(trs), pickup_faces, rows, samples, links
 
 
 def png(path):
@@ -669,7 +905,8 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r'[a-z0-9_]+', args.course) or not math.isfinite(args.scale) or args.scale <= 0:
         parser.error('course must be a lowercase identifier and scale must be positive and finite')
-    vertices, triangles, paths, boxes = read_source(args.mk64, args.course)
+    vertices, triangles, collision_triangles, paths, boxes = read_source(args.mk64, args.course)
+    mesh = CollisionMesh(vertices, collision_triangles, triangles)
     triangles, duplicates = dedupe(vertices, triangles)
     offsets, overlap_groups, _ = overlap_offsets(vertices, triangles)
     points, misses = heights(samples(paths[0], args.scale), vertices, triangles)
@@ -679,7 +916,11 @@ def main():
         misses += fallback
         branch_points.append((start, end, branch))
         print(f'  branch {start}->{end}: {len(branch)} sections')
-    trv, trf, trs, pickups = road(points, args.scale, branch_points, boxes)
+    trv, trf, trs, pickups, rows, edge_samples, links = road(points, args.scale, mesh, branch_points, boxes)
+    mesh.report(edge_samples, args.scale)
+    if args.course in ('luigi_raceway', 'koopa_troopa_beach'):
+        name = 'luigi' if args.course == 'luigi_raceway' else 'koopa'
+        mesh.debug(args.out / 'build' / f'{name}_collision.png', rows, links, args.scale, edge_samples)
     scene, objects, tims, after, capped, missing, untextured, untextured_arrays = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures, offsets)
     skyverts = [(-12000, 0, -12000), (12000, 0, -12000), (12000, 0, 12000), (-12000, 0, 12000), (0, -12000, 0)]
     skytris = [((i, (i+1)%4, 4), [(110, 160, 220), (110, 160, 220), (30, 60, 150)]) for i in range(4)]
