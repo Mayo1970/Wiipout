@@ -9,9 +9,12 @@
 #include "camera.h"
 #include "game.h"
 
+typedef enum { TRACK_FACE_NEAR, TRACK_FACE_FAR, TRACK_FACE_ORDERED } track_face_class_t;
+
 static track_face_t **visible_faces, **sorted_faces;
-static uint32_t *texture_offsets;
-static bool *texture_transparent, *visible_ordered;
+static uint32_t *texture_offsets, *far_texture_offsets;
+static bool *texture_transparent;
+static track_face_class_t *visible_classes;
 
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
@@ -60,8 +63,9 @@ void track_load(const char *base_path) {
 	track_load_sections(get_path(base_path, "track.trs"));
 	visible_faces = mem_bump(sizeof(*visible_faces) * g.track.face_count);
 	sorted_faces = mem_bump(sizeof(*sorted_faces) * g.track.face_count);
-	visible_ordered = mem_bump(sizeof(*visible_ordered) * g.track.face_count);
+	visible_classes = mem_bump(sizeof(*visible_classes) * g.track.face_count);
 	texture_offsets = mem_bump(sizeof(*texture_offsets) * g.track.textures.len);
+	far_texture_offsets = mem_bump(sizeof(*far_texture_offsets) * g.track.textures.len);
 
 	g.track.pickups_len = 0;
 	section_t *s = g.track.sections;
@@ -313,15 +317,17 @@ void track_draw_section(section_t *section) {
 	}
 }
 
-static bool track_face_ordered(track_face_t *face, vec3_t cam_pos, bool section_near) {
-	if (texture_transparent[face->texture]) return true;
+static track_face_class_t track_face_classify(track_face_t *face, vec3_t cam_pos, bool section_near) {
+	if (texture_transparent[face->texture]) return TRACK_FACE_ORDERED;
+	track_face_class_t class = TRACK_FACE_NEAR;
 	for (int i = 0; i < 2; i++) {
 		for (int j = 0; j < 3; j++) {
 			vertex_t *v = &face->tris[i].vertices[j];
-			if (v->color.a < 255 || (!section_near && vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR)) return true;
+			if (v->color.a < 255) return TRACK_FACE_ORDERED;
+			if (!section_near && vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR) class = TRACK_FACE_FAR;
 		}
 	}
-	return false;
+	return class;
 }
 
 void track_draw(camera_t *camera) {	
@@ -332,7 +338,10 @@ void track_draw(camera_t *camera) {
 	vec3_t cam_pos = camera->position;
 	vec3_t cam_dir = camera_forward(camera);
 	uint32_t visible_count = 0;
-	for (int i = 0; i < g.track.textures.len; i++) texture_offsets[i] = 0;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		texture_offsets[i] = 0;
+		far_texture_offsets[i] = 0;
+	}
 	
 	for(int32_t i = 0; i < g.track.section_count; i++) {
 		section_t *s = &g.track.sections[i];
@@ -352,8 +361,9 @@ void track_draw(camera_t *camera) {
 				texture_from_list(g.track.textures, face->texture);
 				error_if(visible_count >= g.track.face_count, "Too many visible track faces");
 				visible_faces[visible_count] = face;
-				visible_ordered[visible_count] = track_face_ordered(face, cam_pos, section_near);
-				if (!visible_ordered[visible_count]) texture_offsets[face->texture]++;
+				visible_classes[visible_count] = track_face_classify(face, cam_pos, section_near);
+				if (visible_classes[visible_count] == TRACK_FACE_NEAR) texture_offsets[face->texture]++;
+				else if (visible_classes[visible_count] == TRACK_FACE_FAR) far_texture_offsets[face->texture]++;
 				visible_count++;
 				PROF_ADD(faces, 1);
 			}
@@ -366,9 +376,16 @@ void track_draw(camera_t *camera) {
 		texture_offsets[i] = sorted_count;
 		sorted_count += count;
 	}
+	uint32_t far_end = sorted_count;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		uint32_t count = far_texture_offsets[i];
+		far_texture_offsets[i] = far_end;
+		far_end += count;
+	}
 	for (uint32_t i = 0; i < visible_count; i++) {
 		track_face_t *face = visible_faces[i];
-		if (!visible_ordered[i]) sorted_faces[texture_offsets[face->texture]++] = face;
+		if (visible_classes[i] == TRACK_FACE_NEAR) sorted_faces[texture_offsets[face->texture]++] = face;
+		else if (visible_classes[i] == TRACK_FACE_FAR) sorted_faces[far_texture_offsets[face->texture]++] = face;
 	}
 	// Sorted faces were all proven to have every vertex inside the near distance.
 	render_gx_fade_inside(true);
@@ -379,9 +396,15 @@ void track_draw(camera_t *camera) {
 		render_push_tris(face->tris[1], texture);
 	}
 	render_gx_fade_inside(false);
+	for (uint32_t i = sorted_count; i < far_end; i++) {
+		track_face_t *face = sorted_faces[i];
+		uint16_t texture = texture_from_list(g.track.textures, face->texture);
+		render_push_tris(face->tris[0], texture);
+		render_push_tris(face->tris[1], texture);
+	}
 	for (uint32_t i = 0; i < visible_count; i++) {
 		track_face_t *face = visible_faces[i];
-		if (visible_ordered[i]) {
+		if (visible_classes[i] == TRACK_FACE_ORDERED) {
 			uint16_t texture = texture_from_list(g.track.textures, face->texture);
 			render_push_tris(face->tris[0], texture);
 			render_push_tris(face->tris[1], texture);
