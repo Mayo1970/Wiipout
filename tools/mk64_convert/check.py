@@ -42,17 +42,19 @@ def compressed(path):
         assert len(out) <= sum(sizes)
     assert len(out) == sum(sizes)
     offset = 0
+    dimensions = []
     for size in sizes:
         tim = out[offset:offset+size]
         assert len(tim) >= 20
         magic, kind, block, x, y, width, height = struct.unpack_from('<IIIHHHH', tim)
         assert magic == 0x10 and kind == 2 and block == 12+width*height*2
-        assert len(tim) == 8+block and width >= 32 and height >= 32
+        assert len(tim) == 8+block and 1 <= width <= 256 and 1 <= height <= 256
+        dimensions.append((width, height))
         offset += size
-    return count
+    return dimensions
 
 
-def objects(path):
+def objects(path, textures):
     data = path.read_bytes()
     pos = 0
     count = triangles = 0
@@ -68,8 +70,17 @@ def objects(path):
         for _ in range(np):
             assert pos+24 <= len(data)
             kind, flags, a, b, c = struct.unpack_from('>hhhhh', data, pos)
-            assert kind == 5 and all(0 <= i < nv for i in (a, b, c))
-            pos += 24
+            assert kind in (5, 6) and all(0 <= i < nv for i in (a, b, c))
+            if kind == 6:
+                assert pos+36 <= len(data)
+                texture, = struct.unpack_from('>h', data, pos+10)
+                assert 0 <= texture < len(textures)
+                w, h = textures[texture]
+                uv = data[pos+16:pos+22]
+                assert all(uv[i] < (w if i % 2 == 0 else h) for i in range(6))
+                pos += 36
+            else:
+                pos += 24
             triangles += 1
         count += 1
     assert pos == len(data) and count
@@ -86,7 +97,7 @@ def check(folder):
     nv, nf, ns = len(trv)//16, len(trf)//20, len(trs)//156
     assert nv and nf and ns and len(trc) == nf and all(x == 1 for x in trc)
     assert len(ttf) == 42
-    texcount = compressed(folder/'library.cmp')
+    texcount = len(compressed(folder/'library.cmp'))
     assert all(0 <= i < texcount for i in struct.unpack('>21h', ttf))
     for face in struct.iter_unpack('>hhhhhhhBBI', trf):
         assert all(0 <= i < nv for i in face[:4])
@@ -112,8 +123,8 @@ def check(folder):
         current = nxt
     assert current == 0 and len(seen) == ns
     for name in ('scene', 'sky'):
-        compressed(folder/(name+'.cmp'))
-        count, triangles = objects(folder/(name+'.prm'))
+        textures = compressed(folder/(name+'.cmp'))
+        count, triangles = objects(folder/(name+'.prm'), textures)
         print(f'  {name}: {count} objects, {triangles} triangles')
     print(f'{folder.name}: OK, {ns} sections, {nf} faces, {nv} vertices')
 

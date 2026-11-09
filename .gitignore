@@ -63,3 +63,4 @@ AGENTS.MD
 
 /mk64/
 *.trc
+__pycache__/
