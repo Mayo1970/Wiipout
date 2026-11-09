@@ -18,6 +18,9 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <ogc/cache.h>
 #include <ogc/console.h>
 #include <ogc/lwp_watchdog.h>
+#include <ogc/lwp.h>
+#include <ogc/mutex.h>
+#include <ogc/cond.h>
 #include <ogc/pad.h>
 #include <ogc/system.h>
 #include <ogc/video.h>
@@ -82,6 +85,12 @@ static bool audio_voice_started;
 static u32 audio_last_ticks;
 static u64 audio_ticks;
 static u64 audio_write_frame;
+static lwp_t audio_thread;
+static uint8_t audio_stack[32 * 1024] __attribute__((aligned(8)));
+static volatile bool audio_stopping;
+static bool audio_thread_started;
+
+static void *platform_audio_worker(void *unused);
 
 static void platform_audio_init(void) {
 	ASND_Init();
@@ -94,6 +103,12 @@ static void platform_audio_init(void) {
 	if (ASND_SetInfiniteVoice(AUDIO_VOICE, VOICE_STEREO_16BIT, AUDIO_RATE, 0,
 		audio_ring, AUDIO_RING_BYTES, 255, 255) == SND_OK) {
 		audio_voice_started = true;
+		if (LWP_CreateThread(&audio_thread, platform_audio_worker, NULL, audio_stack, sizeof(audio_stack), 90) == 0) {
+			audio_thread_started = true;
+		}
+		else {
+			printf("audio: failed to create mixer thread\n");
+		}
 	}
 }
 
@@ -114,7 +129,8 @@ static void platform_audio_update(void) {
 		u32 frames = target - audio_write_frame > AUDIO_CHUNK_FRAMES ? AUDIO_CHUNK_FRAMES : (u32)(target - audio_write_frame);
 		u32 offset = (u32)audio_write_frame & (AUDIO_RING_FRAMES - 1);
 		if (frames > AUDIO_RING_FRAMES - offset) frames = AUDIO_RING_FRAMES - offset;
-		if (audio_mix_cb) audio_mix_cb(audio_scratch, frames * 2);
+		void (*mix_cb)(float *, uint32_t) = __atomic_load_n(&audio_mix_cb, __ATOMIC_ACQUIRE);
+		if (mix_cb) mix_cb(audio_scratch, frames * 2);
 		else memset(audio_scratch, 0, frames * 2 * sizeof(float));
 		for (u32 i = 0; i < frames * 2; i++) {
 			float sample = fmaxf(-1.0f, fminf(audio_scratch[i], 1.0f));
@@ -125,8 +141,22 @@ static void platform_audio_update(void) {
 	DCFlushRange(audio_ring, AUDIO_RING_BYTES);
 }
 
+static void *platform_audio_worker(void *unused) {
+	(void)unused;
+	while (!__atomic_load_n(&audio_stopping, __ATOMIC_ACQUIRE)) {
+		platform_audio_update();
+		usleep(5000);
+	}
+	return NULL;
+}
+
 static void platform_audio_shutdown(void) {
 	if (!audio_ready) return;
+	if (audio_thread_started) {
+		__atomic_store_n(&audio_stopping, true, __ATOMIC_RELEASE);
+		LWP_JoinThread(audio_thread, NULL);
+		audio_thread_started = false;
+	}
 	ASND_StopVoice(AUDIO_VOICE);
 	ASND_End();
 	free(audio_ring);
@@ -483,8 +513,10 @@ static void platform_pump_events(void) {
 static void platform_prepare_frame(void) {
 }
 
+static void platform_wii_io_poll(void);
+
 static void platform_end_frame(void) {
-	platform_audio_update();
+	platform_wii_io_poll();
 #if defined(RENDERER_NULL)
 	VIDEO_WaitVSync();
 #endif
@@ -528,7 +560,223 @@ void platform_set_fullscreen(bool fullscreen) {
 }
 
 void platform_set_audio_mix_cb(void (*cb)(float *buffer, uint32_t len)) {
-	audio_mix_cb = cb;
+	__atomic_store_n(&audio_mix_cb, cb, __ATOMIC_RELEASE);
+}
+
+static void platform_wii_io_shutdown(void);
+
+#define WII_IO_CHUNK (32 * 1024)
+static lwp_t io_thread;
+static mutex_t io_mutex;
+static cond_t io_cond;
+static uint8_t io_stack[32 * 1024] __attribute__((aligned(8)));
+static bool io_ready, io_stopping, io_save_active;
+static uint8_t *io_save_data;
+static uint32_t io_save_len;
+static char io_save_path[256], io_music_path[1024];
+static volatile uint32_t io_music_generation, io_music_loaded, io_music_total;
+static volatile int io_music_state = WII_MUSIC_ERROR;
+static uint32_t io_save_failures;
+#ifdef WII_PROFILE
+typedef struct {
+	bool music;
+	uint32_t bytes;
+	double ms;
+} wii_io_event_t;
+static wii_io_event_t io_events[64];
+static uint32_t io_event_read, io_event_write;
+
+static void platform_wii_io_event(bool music, uint32_t bytes, u64 start) {
+	if (io_event_write - io_event_read == 64) return;
+	wii_io_event_t *event = &io_events[io_event_write++ % 64];
+	event->music = music;
+	event->bytes = bytes;
+	event->ms = (double)diff_ticks(start, gettime()) / TB_TIMER_CLOCK;
+}
+#endif
+
+static bool platform_wii_write_save(const char *path, const uint8_t *data, uint32_t len) {
+	char tmp[260];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	FILE *file = fopen(tmp, "wb");
+	if (!file) return false;
+	size_t written = fwrite(data, 1, len, file);
+	int closed = fclose(file);
+	if (written != len || closed != 0) {
+		remove(tmp);
+		return false;
+	}
+	remove(path);
+	return rename(tmp, path) == 0;
+}
+
+static void *platform_wii_io_worker(void *unused) {
+	(void)unused;
+	FILE *music_file = NULL;
+	uint32_t generation = 0, total = 0, loaded = 0;
+#ifdef WII_PROFILE
+	u64 music_start = 0;
+#endif
+	for (;;) {
+		LWP_MutexLock(io_mutex);
+		while (!io_stopping && !io_save_data && generation == io_music_generation && !music_file)
+			LWP_CondWait(io_cond, io_mutex);
+		if (io_stopping && !io_save_data) {
+			LWP_MutexUnlock(io_mutex);
+			break;
+		}
+		if (io_save_data) {
+			uint8_t *data = io_save_data;
+			uint32_t len = io_save_len;
+			char path[sizeof(io_save_path)];
+			memcpy(path, io_save_path, sizeof(path));
+			io_save_data = NULL;
+			io_save_active = true;
+			LWP_MutexUnlock(io_mutex);
+#ifdef WII_PROFILE
+			u64 start = gettime();
+#endif
+			bool ok = platform_wii_write_save(path, data, len);
+			free(data);
+			LWP_MutexLock(io_mutex);
+			io_save_active = false;
+			if (!ok) io_save_failures++;
+#ifdef WII_PROFILE
+			platform_wii_io_event(false, len, start);
+#endif
+			LWP_MutexUnlock(io_mutex);
+			continue;
+		}
+		if (generation != io_music_generation) {
+			generation = io_music_generation;
+			char path[sizeof(io_music_path)];
+			memcpy(path, io_music_path, sizeof(path));
+			LWP_MutexUnlock(io_mutex);
+			if (music_file) fclose(music_file);
+#ifdef WII_PROFILE
+			music_start = gettime();
+#endif
+			music_file = music_buffer ? fopen(path, "rb") : NULL;
+			long size = -1;
+			if (music_file && fseek(music_file, 0, SEEK_END) == 0) {
+				size = ftell(music_file);
+				if (fseek(music_file, 0, SEEK_SET) != 0) size = -1;
+			}
+			loaded = 0;
+			total = size > 0 && size <= WII_MUSIC_BYTES ? (uint32_t)size : 0;
+			LWP_MutexLock(io_mutex);
+			if (generation == io_music_generation) {
+				io_music_total = total;
+				if (!total) io_music_state = WII_MUSIC_ERROR;
+			}
+			LWP_MutexUnlock(io_mutex);
+			if (!total && music_file) { fclose(music_file); music_file = NULL; }
+			continue;
+		}
+		LWP_MutexUnlock(io_mutex);
+		if (music_file) {
+			uint32_t chunk = total - loaded;
+			if (chunk > WII_IO_CHUNK) chunk = WII_IO_CHUNK;
+			size_t count = fread(music_buffer + loaded, 1, chunk, music_file);
+			loaded += count;
+			bool finished = count != chunk || loaded == total;
+			if (finished) { fclose(music_file); music_file = NULL; }
+			LWP_MutexLock(io_mutex);
+			if (generation == io_music_generation) {
+				__asm__ volatile("sync" ::: "memory");
+				io_music_loaded = loaded;
+				if (finished) io_music_state = count == chunk ? WII_MUSIC_DONE : WII_MUSIC_ERROR;
+#ifdef WII_PROFILE
+				if (finished && count == chunk) {
+					platform_wii_io_event(true, loaded, music_start);
+				}
+#endif
+			}
+			LWP_MutexUnlock(io_mutex);
+		}
+	}
+	if (music_file) fclose(music_file);
+	return NULL;
+}
+
+static void platform_wii_io_init(void) {
+	if (LWP_MutexInit(&io_mutex, false) < 0) return;
+	if (LWP_CondInit(&io_cond) < 0) { LWP_MutexDestroy(io_mutex); return; }
+	LWP_SetThreadPriority(LWP_GetSelf(), 80);
+	if (LWP_CreateThread(&io_thread, platform_wii_io_worker, NULL, io_stack, sizeof(io_stack), 50) < 0) {
+		LWP_CondDestroy(io_cond);
+		LWP_MutexDestroy(io_mutex);
+		return;
+	}
+	io_ready = true;
+	atexit(platform_wii_io_shutdown);
+}
+
+uint32_t platform_wii_music_request(const char *asset_path) {
+	if (!io_ready) { io_music_state = WII_MUSIC_ERROR; return 0; }
+	LWP_MutexLock(io_mutex);
+	io_music_generation++;
+	snprintf(io_music_path, sizeof(io_music_path), "%s%s", path_assets, asset_path);
+	io_music_loaded = io_music_total = 0;
+	io_music_state = WII_MUSIC_LOADING;
+	uint32_t generation = io_music_generation;
+	LWP_CondSignal(io_cond);
+	LWP_MutexUnlock(io_mutex);
+	return generation;
+}
+
+wii_music_status_t platform_wii_music_status(void) {
+	wii_music_status_t status;
+	status.generation = io_music_generation;
+	status.loaded = io_music_loaded;
+	__asm__ volatile("sync" ::: "memory");
+	status.total = io_music_total;
+	status.state = io_music_state;
+	status.data = music_buffer;
+	return status;
+}
+
+static void platform_wii_wait_save(bool bounded) {
+	if (!io_ready) return;
+	u64 start = gettime();
+	for (;;) {
+		LWP_MutexLock(io_mutex);
+		bool busy = io_save_active || io_save_data;
+		LWP_MutexUnlock(io_mutex);
+		if (!busy || (bounded && diff_ticks(start, gettime()) >= TB_TIMER_CLOCK * 2000ULL)) break;
+		usleep(1000);
+	}
+}
+
+static void platform_wii_io_poll(void) {
+	if (!io_ready) return;
+	LWP_MutexLock(io_mutex);
+	uint32_t failures = io_save_failures;
+	io_save_failures = 0;
+#ifdef WII_PROFILE
+	wii_io_event_t events[64];
+	uint32_t event_count = 0;
+	while (io_event_read != io_event_write)
+		events[event_count++] = io_events[io_event_read++ % 64];
+#endif
+	LWP_MutexUnlock(io_mutex);
+	while (failures--) printf("save: write failed (worker)\n");
+#ifdef WII_PROFILE
+	for (uint32_t i = 0; i < event_count; i++) {
+		printf("PROF %s bytes=%u ms=%.1f\n", events[i].music ? "music_load" : "save_write", events[i].bytes, events[i].ms);
+	}
+#endif
+}
+
+static void platform_wii_io_shutdown(void) {
+	if (!io_ready) return;
+	LWP_MutexLock(io_mutex);
+	io_stopping = true;
+	LWP_CondSignal(io_cond);
+	LWP_MutexUnlock(io_mutex);
+	platform_wii_wait_save(true);
+	platform_wii_io_poll();
+	io_ready = false;
 }
 
 static char *platform_path(const char *root, const char *name) {
@@ -540,36 +788,37 @@ bool platform_asset_exists(const char *name) {
 	return file_exists(platform_path(path_assets, name));
 }
 
+#ifdef WII_PROFILE
+static uint32_t scene_assets;
+static uint64_t scene_asset_bytes, scene_asset_ticks;
+#endif
+
 FILE *platform_open_asset(const char *name, const char *mode) {
 	FILE *file = fopen(platform_path(path_assets, name), mode);
+#if defined(WII_DIAG) || defined(WII_SMOKE)
 	platform_wii_log_sync();
+#endif
 	return file;
 }
 
-FILE *platform_wii_music_load(FILE *file) {
-	if (!music_buffer || fseek(file, 0, SEEK_END) != 0) return file;
-	long size = ftell(file);
-	if (size <= 0 || size > WII_MUSIC_BYTES || fseek(file, 0, SEEK_SET) != 0) {
-		printf("music: %ld bytes, streaming from storage\n", size);
-		fseek(file, 0, SEEK_SET);
-		return file;
-	}
-	size_t read = fread(music_buffer, 1, size, file);
-	fclose(file);
-	if (read != (size_t)size) {
-		printf("music: short read %u of %ld bytes\n", (unsigned int)read, size);
-		return NULL;
-	}
-	return fmemopen(music_buffer, size, "rb");
-}
-
 uint8_t *platform_load_asset(const char *name, uint32_t *bytes_read) {
+#ifdef WII_PROFILE
+	u64 start = gettime();
+#endif
 	uint8_t *bytes = file_load(platform_path(path_assets, name), bytes_read);
+#ifdef WII_PROFILE
+	scene_asset_ticks += diff_ticks(start, gettime());
+	scene_assets++;
+	if (bytes) scene_asset_bytes += *bytes_read;
+#endif
+#if defined(WII_DIAG) || defined(WII_SMOKE)
 	platform_wii_log_sync();
+#endif
 	return bytes;
 }
 
 uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
+	platform_wii_wait_save(false);
 	char path[256];
 	snprintf(path, sizeof(path), "%s%s", path_userdata, name);
 	if (!file_exists(path)) {
@@ -578,43 +827,37 @@ uint8_t *platform_load_userdata(const char *name, uint32_t *bytes_read) {
 	}
 	if (!file_exists(path)) {
 		*bytes_read = 0;
+#if defined(WII_DIAG) || defined(WII_SMOKE)
 		platform_wii_log_sync();
+#endif
 		return NULL;
 	}
 	uint8_t *bytes = file_load(path, bytes_read);
+#if defined(WII_DIAG) || defined(WII_SMOKE)
 	platform_wii_log_sync();
+#endif
 	return bytes;
 }
 
 uint32_t platform_store_userdata(const char *name, void *bytes, int32_t len) {
-	char path[256];
-	char tmp[256];
-	snprintf(path, sizeof(path), "%s%s", path_userdata, name);
-	snprintf(tmp, sizeof(tmp), "%s%s.tmp", path_userdata, name);
-
-	FILE *f = fopen(tmp, "wb");
-	if (!f) {
-		printf("save: write failed (open %s)\n", tmp);
-		platform_wii_log_sync();
+	if (!io_ready || len < 0) {
+		printf("save: write failed (worker unavailable)\n");
 		return 0;
 	}
-	size_t written = fwrite(bytes, 1, len, f);
-	int closed = fclose(f);
-	if (written != (size_t)len || closed != 0) {
-		remove(tmp);
-		printf("save: write failed (write %s)\n", tmp);
-		platform_wii_log_sync();
+	uint8_t *copy = malloc(len ? (size_t)len : 1);
+	if (!copy) {
+		printf("save: write failed (out of memory)\n");
 		return 0;
 	}
-
-	// FAT rename does not overwrite an existing file
-	remove(path);
-	if (rename(tmp, path) != 0) {
-		printf("save: write failed (rename %s)\n", tmp);
-		platform_wii_log_sync();
-		return 0;
-	}
-	platform_wii_log_sync();
+	memcpy(copy, bytes, len);
+	LWP_MutexLock(io_mutex);
+	uint8_t *old = io_save_data;
+	io_save_data = copy;
+	io_save_len = len;
+	snprintf(io_save_path, sizeof(io_save_path), "%s%s", path_userdata, name);
+	LWP_CondSignal(io_cond);
+	LWP_MutexUnlock(io_mutex);
+	free(old);
 	return len;
 }
 
@@ -636,6 +879,12 @@ static void platform_video_init(void) {
 }
 
 void platform_wii_mem_log(const char *tag) {
+#ifdef WII_PROFILE
+	printf("PROF scene_load tag=%s assets=%u bytes=%llu io_ms=%.1f\n", tag,
+		scene_assets, (unsigned long long)scene_asset_bytes, (double)scene_asset_ticks / TB_TIMER_CLOCK);
+	scene_assets = 0;
+	scene_asset_bytes = scene_asset_ticks = 0;
+#endif
 	mem_stats_t s;
 	mem_get_stats(&s);
 	unsigned long mem1 = (uintptr_t)SYS_GetArena1Hi() - (uintptr_t)SYS_GetArena1Lo();
@@ -695,7 +944,7 @@ static char diag_text[1024];
 static volatile bool diag_crashed;
 
 static const char *diag_phase_names[] = {
-	"none", "input", "update", "flush wait", "texture wait", "frame copy", "frame wait", "frame flip", "vsync", "audio",
+	"none", "input", "update", "flush wait", "texture wait", "frame copy", "frame wait", "frame flip", "vsync", "frame end",
 };
 
 static bool diag_ram(u32 p) {
@@ -1125,6 +1374,8 @@ int main(int argc, char *argv[]) {
 
 	bool sd_mounted = dvmProbeMountDiscIface("sd", &__io_wiisd, 4, 64);
 	platform_log_init(sd_mounted);
+	platform_wii_io_init();
+	atexit(platform_audio_shutdown);
 	const char *data_root = NULL;
 	if (sd_mounted && platform_data_root_exists("sd:/apps/wiipeout/wipeout")) {
 		data_root = "sd:/apps/wiipeout/";
@@ -1150,6 +1401,7 @@ int main(int argc, char *argv[]) {
 		}
 		platform_rumble_off();
 		platform_audio_shutdown();
+		platform_wii_io_shutdown();
 		platform_log_close();
 		if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 		exit(0);
@@ -1185,7 +1437,7 @@ int main(int argc, char *argv[]) {
 			platform_prepare_frame();
 			WII_DIAG_PHASE(WII_PHASE_UPDATE);
 			system_update();
-			WII_DIAG_PHASE(WII_PHASE_AUDIO);
+			WII_DIAG_PHASE(WII_PHASE_FRAME_END);
 			platform_end_frame();
 			PROF_END();
 #ifdef WII_DIAG
@@ -1197,6 +1449,7 @@ int main(int argc, char *argv[]) {
 	PROF_TOTAL();
 	platform_rumble_off();
 	platform_audio_shutdown();
+	platform_wii_io_shutdown();
 	platform_log_close();
 	if (power_requested) SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 	exit(0);
