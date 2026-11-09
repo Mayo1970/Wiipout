@@ -351,6 +351,27 @@ void ship_draw(ship_t *self) {
 	object_draw(self->model, &self->mat);
 }
 
+#ifdef PLATFORM_WII
+static bool ship_shadow_ray_triangle(vec3_t origin, vec3_t direction, tris_t *tri, float *distance) {
+	vec3_t a = tri->vertices[0].pos;
+	vec3_t edge1 = vec3_sub(tri->vertices[1].pos, a);
+	vec3_t edge2 = vec3_sub(tri->vertices[2].pos, a);
+	vec3_t h = vec3_cross(direction, edge2);
+	float det = vec3_dot(edge1, h);
+	if (fabsf(det) < 0.000001f) return false;
+
+	float inv_det = 1.0f / det;
+	vec3_t s = vec3_sub(origin, a);
+	float u = vec3_dot(s, h) * inv_det;
+	if (u < 0.0f || u > 1.0f) return false;
+	vec3_t q = vec3_cross(s, edge1);
+	float v = vec3_dot(direction, q) * inv_det;
+	if (v < 0.0f || u + v > 1.0f) return false;
+	*distance = vec3_dot(edge2, q) * inv_det;
+	return *distance >= 0.0f;
+}
+#endif
+
 void ship_draw_shadow(ship_t *self) {	
 	track_face_t *face = track_section_get_base_face(self->section);
 
@@ -359,6 +380,79 @@ void ship_draw_shadow(ship_t *self) {
 	vec3_t wngl = vec3_transform(vec3(-256, 0, -384), &self->mat);
 	vec3_t wngr = vec3_transform(vec3( 256, 0, -384), &self->mat);
 
+#ifdef PLATFORM_WII
+	const float shadow_clearance = 4.0f;
+	const float ray_start = 1024.0f;
+	float side = vec3_distance_to_plane(self->position, face_point, face->normal) < 0.0f ? -1.0f : 1.0f;
+	vec3_t up = vec3_mulf(face->normal, side);
+	vec3_t down = vec3_mulf(up, -1.0f);
+	section_t *sections[3] = {self->section, self->section->prev, self->section->next};
+	vertex_t vertices[15];
+	rgba_t color = rgba(0, 0, 0, 128);
+	int index = 0;
+
+	for (int row = 0; row <= 4; row++) {
+		for (int col = 0; col <= row; col++) {
+			float left = (float)(row - col) * 0.25f;
+			float right = (float)col * 0.25f;
+			float tip = 1.0f - left - right;
+			vec3_t p = vec3_add(vec3_mulf(nose, tip),
+				vec3_add(vec3_mulf(wngl, left), vec3_mulf(wngr, right)));
+			vec3_t origin = vec3_add(p, vec3_mulf(up, ray_start));
+			vec3_t hit_normal = up;
+			float closest = 1.0e30f;
+			bool hit = false;
+
+			for (int si = 0; si < 3; si++) {
+				section_t *section = sections[si];
+				if (!section) continue;
+				for (int fi = 0; fi < section->face_count; fi++) {
+					track_face_t *candidate = &g.track.faces[section->face_start + fi];
+					for (int ti = 0; ti < 2; ti++) {
+						float t;
+						// Take the surface nearest the shadow point, not the topmost: tunnels and wings in walls.
+						if (ship_shadow_ray_triangle(origin, down, &candidate->tris[ti], &t) &&
+							fabsf(t - ray_start) < fabsf(closest - ray_start)) {
+							closest = t;
+							hit = true;
+							hit_normal = candidate->normal;
+							if (vec3_dot(hit_normal, up) < 0.0f) {
+								hit_normal = vec3_mulf(hit_normal, -1.0f);
+							}
+						}
+					}
+				}
+			}
+			if (hit) {
+				p = vec3_add(vec3_add(origin, vec3_mulf(down, closest)),
+					vec3_mulf(hit_normal, shadow_clearance));
+			}
+			else {
+				p = vec3_add(vec3_sub(p, vec3_mulf(face->normal,
+					vec3_distance_to_plane(p, face_point, face->normal))),
+					vec3_mulf(up, shadow_clearance));
+			}
+			vertices[index++] = (vertex_t){.pos = p,
+				.uv = {64.0f * tip + 128.0f * right, 256.0f * (left + right)}, .color = color};
+		}
+	}
+
+	// Rows run from nose to wings; both triangles keep the original winding.
+	for (int row = 0; row < 4; row++) {
+		int top = row * (row + 1) / 2;
+		int bottom = (row + 1) * (row + 2) / 2;
+		for (int col = 0; col <= row; col++) {
+			render_push_tris((tris_t){.vertices = {
+				vertices[bottom + col], vertices[bottom + col + 1], vertices[top + col]
+			}}, self->shadow_texture);
+			if (col < row) {
+				render_push_tris((tris_t){.vertices = {
+					vertices[bottom + col + 1], vertices[top + col + 1], vertices[top + col]
+				}}, self->shadow_texture);
+			}
+		}
+	}
+#else
 	nose = vec3_sub(nose, vec3_mulf(face->normal, vec3_distance_to_plane(nose, face_point, face->normal)));
 	wngl = vec3_sub(wngl, vec3_mulf(face->normal, vec3_distance_to_plane(wngl, face_point, face->normal)));
 	wngr = vec3_sub(wngr, vec3_mulf(face->normal, vec3_distance_to_plane(wngr, face_point, face->normal)));
@@ -371,6 +465,7 @@ void ship_draw_shadow(ship_t *self) {
 			{.pos = nose, .uv = {64, 0},    .color = color},
 		}
 	}, self->shadow_texture);
+#endif
 }
 
 void ship_update(ship_t *self) {
