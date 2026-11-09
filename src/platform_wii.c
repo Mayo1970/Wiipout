@@ -816,6 +816,7 @@ typedef struct {
 	wii_profile_frame_t sum;
 	uint64_t frames;
 	double frame_ms, frame_max, update_max, submit_max, wait_max;
+	double sim_ships_max, sim_droid_max, sim_camera_max, sim_weapons_max, sim_other_max, draw_scene_max, draw_track_max, draw_ships_max, draw_fx_max, draw_2d_max, push_max;
 } profile_stats_t;
 static profile_stats_t profile_window, profile_total;
 static double profile_start;
@@ -830,6 +831,29 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 	if (s->submit_max < wii_profile_frame.submit_ms) s->submit_max = wii_profile_frame.submit_ms;
 	s->sum.wait_ms += wii_profile_frame.wait_ms;
 	if (s->wait_max < wii_profile_frame.wait_ms) s->wait_max = wii_profile_frame.wait_ms;
+	s->sum.sim_ships_ms += wii_profile_frame.sim_ships_ms;
+	if (s->sim_ships_max < wii_profile_frame.sim_ships_ms) s->sim_ships_max = wii_profile_frame.sim_ships_ms;
+	s->sum.sim_droid_ms += wii_profile_frame.sim_droid_ms;
+	if (s->sim_droid_max < wii_profile_frame.sim_droid_ms) s->sim_droid_max = wii_profile_frame.sim_droid_ms;
+	s->sum.sim_camera_ms += wii_profile_frame.sim_camera_ms;
+	if (s->sim_camera_max < wii_profile_frame.sim_camera_ms) s->sim_camera_max = wii_profile_frame.sim_camera_ms;
+	s->sum.sim_weapons_ms += wii_profile_frame.sim_weapons_ms;
+	if (s->sim_weapons_max < wii_profile_frame.sim_weapons_ms) s->sim_weapons_max = wii_profile_frame.sim_weapons_ms;
+	s->sum.sim_other_ms += wii_profile_frame.sim_other_ms;
+	if (s->sim_other_max < wii_profile_frame.sim_other_ms) s->sim_other_max = wii_profile_frame.sim_other_ms;
+	s->sum.draw_scene_ms += wii_profile_frame.draw_scene_ms;
+	if (s->draw_scene_max < wii_profile_frame.draw_scene_ms) s->draw_scene_max = wii_profile_frame.draw_scene_ms;
+	s->sum.draw_track_ms += wii_profile_frame.draw_track_ms;
+	if (s->draw_track_max < wii_profile_frame.draw_track_ms) s->draw_track_max = wii_profile_frame.draw_track_ms;
+	s->sum.draw_ships_ms += wii_profile_frame.draw_ships_ms;
+	if (s->draw_ships_max < wii_profile_frame.draw_ships_ms) s->draw_ships_max = wii_profile_frame.draw_ships_ms;
+	s->sum.draw_fx_ms += wii_profile_frame.draw_fx_ms;
+	if (s->draw_fx_max < wii_profile_frame.draw_fx_ms) s->draw_fx_max = wii_profile_frame.draw_fx_ms;
+	s->sum.draw_2d_ms += wii_profile_frame.draw_2d_ms;
+	if (s->draw_2d_max < wii_profile_frame.draw_2d_ms) s->draw_2d_max = wii_profile_frame.draw_2d_ms;
+	double push_ms = (double)wii_profile_frame.push_ticks / (double)TB_TIMER_CLOCK;
+	s->sum.push_ms += push_ms;
+	if (s->push_max < push_ms) s->push_max = push_ms;
 	s->sum.draws += wii_profile_frame.draws;
 	s->sum.tris += wii_profile_frame.tris;
 	s->sum.flush_texture += wii_profile_frame.flush_texture;
@@ -856,7 +880,19 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 
 static void profile_print(const char *kind, const profile_stats_t *s) {
 	if (!s->frames) return;
-	printf("PROF %s frames=%llu frame_avg_ms=%.3f frame_max_ms=%.3f update_avg_ms=%.3f update_max_ms=%.3f submit_avg_ms=%.3f submit_max_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f tris_per_draw=%.3f"
+	printf("PROF %s frames=%llu frame_avg_ms=%.3f frame_max_ms=%.3f update_avg_ms=%.3f update_max_ms=%.3f submit_avg_ms=%.3f submit_max_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f"
+		" sim_ships_avg_ms=%.3f sim_ships_max_ms=%.3f"
+		" sim_droid_avg_ms=%.3f sim_droid_max_ms=%.3f"
+		" sim_camera_avg_ms=%.3f sim_camera_max_ms=%.3f"
+		" sim_weapons_avg_ms=%.3f sim_weapons_max_ms=%.3f"
+		" sim_other_avg_ms=%.3f sim_other_max_ms=%.3f"
+		" draw_scene_avg_ms=%.3f draw_scene_max_ms=%.3f"
+		" draw_track_avg_ms=%.3f draw_track_max_ms=%.3f"
+		" draw_ships_avg_ms=%.3f draw_ships_max_ms=%.3f"
+		" draw_fx_avg_ms=%.3f draw_fx_max_ms=%.3f"
+		" draw_2d_avg_ms=%.3f draw_2d_max_ms=%.3f"
+		" push_avg_ms=%.3f push_max_ms=%.3f"
+		" tris_per_draw=%.3f"
 		" draws=%llu"
 		" tris=%llu"
 		" flush_texture=%llu"
@@ -880,7 +916,19 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" replacements=%llu"
 		" arena_peak=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
 		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
-		s->sum.wait_ms / s->frames, s->wait_max, s->sum.draws ? (double)s->sum.tris / s->sum.draws : 0.0,
+		s->sum.wait_ms / s->frames, s->wait_max,
+		s->sum.sim_ships_ms / s->frames, s->sim_ships_max,
+		s->sum.sim_droid_ms / s->frames, s->sim_droid_max,
+		s->sum.sim_camera_ms / s->frames, s->sim_camera_max,
+		s->sum.sim_weapons_ms / s->frames, s->sim_weapons_max,
+		s->sum.sim_other_ms / s->frames, s->sim_other_max,
+		s->sum.draw_scene_ms / s->frames, s->draw_scene_max,
+		s->sum.draw_track_ms / s->frames, s->draw_track_max,
+		s->sum.draw_ships_ms / s->frames, s->draw_ships_max,
+		s->sum.draw_fx_ms / s->frames, s->draw_fx_max,
+		s->sum.draw_2d_ms / s->frames, s->draw_2d_max,
+		s->sum.push_ms / s->frames, s->push_max,
+		s->sum.draws ? (double)s->sum.tris / s->sum.draws : 0.0,
 		(unsigned long long)s->sum.draws,
 		(unsigned long long)s->sum.tris,
 		(unsigned long long)s->sum.flush_texture,

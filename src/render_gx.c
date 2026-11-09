@@ -394,6 +394,7 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 		PROF_ADD(flush_full, batch_texture == texture);
 		render_flush();
 	}
+	PROF_TICKS_START(push_start);
 	batch_texture = texture;
 	if (!view_2d) for (int i = 0; i < 3; i++) {
 		vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
@@ -406,6 +407,7 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 		tris.vertices[i].color.a *= t * t * (3 - 2 * t);
 	}
 	tris_buffer[tris_len++] = tris;
+	PROF_TICKS_ADD(push_ticks, push_start);
 }
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture) {
 	float x = pos.x, y = pos.y, w = size.x, h = size.y;

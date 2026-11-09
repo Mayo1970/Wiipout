@@ -1,3 +1,4 @@
+#include "../wii_profile.h"
 #include "../input.h"
 #include "../system.h"
 #include "../utils.h"
@@ -75,10 +76,28 @@ void race_update(void) {
 		}
 	}
 	else {
+		PROF_WAIT_SNAPSHOT(sim_ships_wait);
+		PROF_TIME_START(sim_ships_start);
 		ships_update();
+		PROF_TIME_ADD(sim_ships_ms, sim_ships_start);
+		PROF_WAIT_SUBTRACT(sim_ships_ms, sim_ships_wait);
+		PROF_WAIT_SNAPSHOT(sim_droid_wait);
+		PROF_TIME_START(sim_droid_start);
 		droid_update(&g.droid, &g.ships[g.pilot]);
+		PROF_TIME_ADD(sim_droid_ms, sim_droid_start);
+		PROF_WAIT_SUBTRACT(sim_droid_ms, sim_droid_wait);
+		PROF_WAIT_SNAPSHOT(sim_camera_wait);
+		PROF_TIME_START(sim_camera_start);
 		camera_update(&g.camera, &g.ships[g.pilot], &g.droid);
+		PROF_TIME_ADD(sim_camera_ms, sim_camera_start);
+		PROF_WAIT_SUBTRACT(sim_camera_ms, sim_camera_wait);
+		PROF_WAIT_SNAPSHOT(sim_weapons_wait);
+		PROF_TIME_START(sim_weapons_start);
 		weapons_update();
+		PROF_TIME_ADD(sim_weapons_ms, sim_weapons_start);
+		PROF_WAIT_SUBTRACT(sim_weapons_ms, sim_weapons_wait);
+		PROF_WAIT_SNAPSHOT(sim_other_wait);
+		PROF_TIME_START(sim_other_start);
 		rumble_update();
 		particles_update();
 		scene_update();
@@ -86,6 +105,8 @@ void race_update(void) {
 		if (g.race_type != RACE_TYPE_TIME_TRIAL) {
 			track_cycle_pickups();
 		}
+		PROF_TIME_ADD(sim_other_ms, sim_other_start);
+		PROF_WAIT_SUBTRACT(sim_other_ms, sim_other_wait);
 
 		if (g.is_attract_mode) {
 			if (input_pressed(A_MENU_START) || input_pressed(A_MENU_SELECT)) {
@@ -106,19 +127,37 @@ void race_update(void) {
 	render_set_view(g.camera.position, g.camera.angle);
 	render_set_screen_position(g.camera.shake);
 
+	PROF_WAIT_SNAPSHOT(draw_scene_wait);
+	PROF_TIME_START(draw_scene_start);
 	scene_draw(&g.camera);
+	PROF_TIME_ADD(draw_scene_ms, draw_scene_start);
+	PROF_WAIT_SUBTRACT(draw_scene_ms, draw_scene_wait);
 	render_set_cull_backface(false);
+	PROF_WAIT_SNAPSHOT(draw_track_wait);
+	PROF_TIME_START(draw_track_start);
 	track_draw(&g.camera);
+	PROF_TIME_ADD(draw_track_ms, draw_track_start);
+	PROF_WAIT_SUBTRACT(draw_track_ms, draw_track_wait);
 	render_set_cull_backface(true);
 
+	PROF_WAIT_SNAPSHOT(draw_ships_wait);
+	PROF_TIME_START(draw_ships_start);
 	ships_draw();
+	PROF_TIME_ADD(draw_ships_ms, draw_ships_start);
+	PROF_WAIT_SUBTRACT(draw_ships_ms, draw_ships_wait);
+	PROF_WAIT_SNAPSHOT(draw_fx_wait);
+	PROF_TIME_START(draw_fx_start);
 	droid_draw(&g.droid);
 	weapons_draw();
 	particles_draw();
+	PROF_TIME_ADD(draw_fx_ms, draw_fx_start);
+	PROF_WAIT_SUBTRACT(draw_fx_ms, draw_fx_wait);
 
 	// Draw 2d
 	render_set_screen_position(vec2(0,0));
 	render_set_view_2d();
+	PROF_WAIT_SNAPSHOT(draw_2d_wait);
+	PROF_TIME_START(draw_2d_start);
 
 	if (g.is_attract_mode && !active_menu) {
 		ui_draw_text("DEMO MODE", ui_scaled_pos(UI_POS_TOP | UI_POS_CENTER, vec2i(-56, 24)), UI_SIZE_8, UI_COLOR_ACCENT);
@@ -136,6 +175,8 @@ void race_update(void) {
 		}
 		menu_update(active_menu);
 	}
+	PROF_TIME_ADD(draw_2d_ms, draw_2d_start);
+	PROF_WAIT_SUBTRACT(draw_2d_ms, draw_2d_wait);
 }
 
 void race_start(void) {
