@@ -154,6 +154,7 @@ void scene_draw(camera_t *camera) {
 			cam_dot < object->radius && 
 			dist_sq < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR)
 		) {
+			if (!object_gx_visible(object, &object->mat)) { PROF_ADD(objects_frustum_culled, 1); object = object->next; continue; }
 			PROF_ADD(objects_drawn, 1);
 			object_draw(object, &object->mat);
 		}
@@ -191,7 +192,7 @@ void scene_set_start_booms(int light_index) {
 
 
 void scene_pulsate_red_light(Object *obj) {
-	uint8_t r = clamp(sinf(system_cycle_time() * M_PI * 2) * 128 + 128, 0, 255);
+	uint8_t r = clamp(sinf(fmodf(system_cycle_time() * M_PI * 2, M_PI * 2)) * 128 + 128, 0, 255);
 	primitive_t *prm = obj->primitives;
 
 	error_if(prm->type != PRM_TYPE_QUAD, "Can't happen: Expected primitive type %x, got %x", PRM_TYPE_QUAD, prm->type);
@@ -202,7 +203,7 @@ void scene_pulsate_red_light(Object *obj) {
 }
 
 void scene_move_oil_pump(Object *pump) {
-	mat4_set_yaw_pitch_roll(&pump->mat, vec3(sinf(system_cycle_time() * 0.125 * M_PI * 2), 0, 0));
+	mat4_set_yaw_pitch_roll(&pump->mat, vec3(sinf(fmodf(system_cycle_time() * 0.125 * M_PI * 2, M_PI * 2)), 0, 0));
 }
 
 static void scene_aurora_set_vertex_color(primitive_vertex_t *v, float phase) {
@@ -210,9 +211,9 @@ static void scene_aurora_set_vertex_color(primitive_vertex_t *v, float phase) {
 	if (y > -6800 || y < -11000) return;
 
 	v->color = rgba(
-		 (sinf(v->coord * phase) * 64.0) + 190,
-		 (sinf(v->coord * (phase + 0.054)) * 64.0) + 190,
-		 (sinf(v->coord * (phase + 0.039)) * 64.0) + 190,
+		 (sinf(fmodf(v->coord * phase, M_PI * 2)) * 64.0) + 190,
+		 (sinf(fmodf(v->coord * (phase + 0.054), M_PI * 2)) * 64.0) + 190,
+		 (sinf(fmodf(v->coord * (phase + 0.039), M_PI * 2)) * 64.0) + 190,
 		 0xFF
 	);
 }

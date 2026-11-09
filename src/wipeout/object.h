@@ -74,10 +74,18 @@ typedef struct Object {
 
 	vec3_t origin;
 	float radius;
+#ifdef RENDERER_GX
+	float frustum_radius;
+#endif
 	struct Object *next;
 } Object;
 
 Object *objects_load(char *name, texture_list_t tl);
 void object_draw(Object *object, mat4_t *mat);
+#ifdef RENDERER_GX
+bool object_gx_visible(Object *object, mat4_t *mat);
+#else
+#define object_gx_visible(object, mat) (true)
+#endif
 
 #endif

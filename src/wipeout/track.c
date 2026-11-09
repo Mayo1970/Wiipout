@@ -9,6 +9,13 @@
 #include "camera.h"
 #include "game.h"
 
+typedef enum { TRACK_FACE_NEAR, TRACK_FACE_FAR, TRACK_FACE_ORDERED } track_face_class_t;
+
+static track_face_t **visible_faces, **sorted_faces;
+static uint32_t *texture_offsets, *far_texture_offsets;
+static bool *texture_transparent;
+static track_face_class_t *visible_classes;
+
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
 
@@ -24,6 +31,7 @@ void track_load(const char *base_path) {
 	
 	image_t *temp_tile = image_alloc(temp_tile_size, temp_tile_size);
 	int len = wipeout64_mode ? cmp->len : ttf->len;
+	texture_transparent = mem_bump(sizeof(bool) * len);
 	for (int i = 0; i < len; i++) {
 		for (int tx = 0; tx < tiles; tx++) {
 			for (int ty = 0; ty < tiles; ty++) {
@@ -32,6 +40,9 @@ void track_load(const char *base_path) {
 				image_copy(sub_tile, temp_tile, 0, 0, sub_tile_size, sub_tile_size, tx * sub_tile_size, ty * sub_tile_size);
 				mem_temp_free(sub_tile);
 			}
+		}
+		for (int p = 0; p < temp_tile->width * temp_tile->height; p++) {
+			if (temp_tile->pixels[p].a < 255) texture_transparent[i] = true;
 		}
 		render_texture_create(temp_tile->width, temp_tile->height, temp_tile->pixels);
 		g.track.textures.len++;
@@ -50,6 +61,11 @@ void track_load(const char *base_path) {
 	if (file_exists(tex_path)) track_load_texture_file(tex_path);
 
 	track_load_sections(get_path(base_path, "track.trs"));
+	visible_faces = mem_bump(sizeof(*visible_faces) * g.track.face_count);
+	sorted_faces = mem_bump(sizeof(*sorted_faces) * g.track.face_count);
+	visible_classes = mem_bump(sizeof(*visible_classes) * g.track.face_count);
+	texture_offsets = mem_bump(sizeof(*texture_offsets) * g.track.textures.len);
+	far_texture_offsets = mem_bump(sizeof(*far_texture_offsets) * g.track.textures.len);
 
 	g.track.pickups_len = 0;
 	section_t *s = g.track.sections;
@@ -301,6 +317,19 @@ void track_draw_section(section_t *section) {
 	}
 }
 
+static track_face_class_t track_face_classify(track_face_t *face, vec3_t cam_pos, bool section_near) {
+	if (texture_transparent[face->texture]) return TRACK_FACE_ORDERED;
+	track_face_class_t class = TRACK_FACE_NEAR;
+	for (int i = 0; i < 2; i++) {
+		for (int j = 0; j < 3; j++) {
+			vertex_t *v = &face->tris[i].vertices[j];
+			if (v->color.a < 255) return TRACK_FACE_ORDERED;
+			if (!section_near && vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR) class = TRACK_FACE_FAR;
+		}
+	}
+	return class;
+}
+
 void track_draw(camera_t *camera) {	
 	render_set_model_mat(&mat4_identity());
 
@@ -308,6 +337,11 @@ void track_draw(camera_t *camera) {
 	// behind. Ideally we'd want to do a full frustum culling here. FIXME.
 	vec3_t cam_pos = camera->position;
 	vec3_t cam_dir = camera_forward(camera);
+	uint32_t visible_count = 0;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		texture_offsets[i] = 0;
+		far_texture_offsets[i] = 0;
+	}
 	
 	for(int32_t i = 0; i < g.track.section_count; i++) {
 		section_t *s = &g.track.sections[i];
@@ -317,10 +351,64 @@ void track_draw(camera_t *camera) {
 		PROF_ADD(track_far, cam_dot > -s->radius && cam_dot < RENDER_FADEOUT_FAR + s->radius);
 		if (
 			cam_dot > -s->radius &&
-			cam_dot < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR) + s->radius
+			cam_dot < RENDER_FADEOUT_FAR + s->radius
 		) {
+			if (!render_gx_sphere_visible(s->center, s->radius)) { PROF_ADD(track_frustum_culled, 1); continue; }
 			PROF_ADD(track_drawn, 1);
-			track_draw_section(s);
+			float near_limit = RENDER_FADEOUT_NEAR - s->radius - 4.0f;
+			bool section_near = near_limit > 0 && vec3_len_sq(diff) < near_limit * near_limit;
+			for (int j = 0; j < s->face_count; j++) {
+				track_face_t *face = &g.track.faces[s->face_start + j];
+				texture_from_list(g.track.textures, face->texture);
+				error_if(visible_count >= g.track.face_count, "Too many visible track faces");
+				visible_faces[visible_count] = face;
+				visible_classes[visible_count] = track_face_classify(face, cam_pos, section_near);
+				if (visible_classes[visible_count] == TRACK_FACE_NEAR) texture_offsets[face->texture]++;
+				else if (visible_classes[visible_count] == TRACK_FACE_FAR) far_texture_offsets[face->texture]++;
+				visible_count++;
+				PROF_ADD(faces, 1);
+			}
+		}
+	}
+
+	uint32_t sorted_count = 0;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		uint32_t count = texture_offsets[i];
+		texture_offsets[i] = sorted_count;
+		sorted_count += count;
+	}
+	uint32_t far_end = sorted_count;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		uint32_t count = far_texture_offsets[i];
+		far_texture_offsets[i] = far_end;
+		far_end += count;
+	}
+	for (uint32_t i = 0; i < visible_count; i++) {
+		track_face_t *face = visible_faces[i];
+		if (visible_classes[i] == TRACK_FACE_NEAR) sorted_faces[texture_offsets[face->texture]++] = face;
+		else if (visible_classes[i] == TRACK_FACE_FAR) sorted_faces[far_texture_offsets[face->texture]++] = face;
+	}
+	// Sorted faces were all proven to have every vertex inside the near distance.
+	render_gx_fade_inside(true);
+	for (uint32_t i = 0; i < sorted_count; i++) {
+		track_face_t *face = sorted_faces[i];
+		uint16_t texture = texture_from_list(g.track.textures, face->texture);
+		render_push_tris(face->tris[0], texture);
+		render_push_tris(face->tris[1], texture);
+	}
+	render_gx_fade_inside(false);
+	for (uint32_t i = sorted_count; i < far_end; i++) {
+		track_face_t *face = sorted_faces[i];
+		uint16_t texture = texture_from_list(g.track.textures, face->texture);
+		render_push_tris(face->tris[0], texture);
+		render_push_tris(face->tris[1], texture);
+	}
+	for (uint32_t i = 0; i < visible_count; i++) {
+		track_face_t *face = visible_faces[i];
+		if (visible_classes[i] == TRACK_FACE_ORDERED) {
+			uint16_t texture = texture_from_list(g.track.textures, face->texture);
+			render_push_tris(face->tris[0], texture);
+			render_push_tris(face->tris[1], texture);
 		}
 	}
 }
@@ -335,10 +423,11 @@ void track_cycle_pickups(void) {
 		}
 		else if (g.track.pickups[i].cooldown_timer <= 0) {
 			flags_add(g.track.pickups[i].face->flags, FACE_PICKUP_ACTIVE);
+			float angle = fmodf(pickup_cycle_time + i, M_PI * 2);
 			track_face_set_color(g.track.pickups[i].face, rgba(
-				sinf( pickup_cycle_time + i) * 127 + 128,
-				cosf( pickup_cycle_time + i) * 127 + 128,
-				sinf(-pickup_cycle_time - i) * 127 + 128,
+				sinf(angle) * 127 + 128,
+				cosf(angle) * 127 + 128,
+				sinf(-angle) * 127 + 128,
 				255
 			));
 		}

@@ -347,7 +347,7 @@ void weapon_update_mine_wait_for_release(weapon_t *self) {
 }
 
 void weapon_update_mine_lights(weapon_t *self, int index) {
-	uint8_t r = sinf(system_cycle_time() * M_PI * 2 + index * 0.66) * 128 + 128;
+	uint8_t r = sinf(fmodf(system_cycle_time() * M_PI * 2 + index * 0.66, M_PI * 2)) * 128 + 128;
 
 	for (int i = 0; i < 8; i++) {
 		primitive_t *prm = &self->model->primitives[i];

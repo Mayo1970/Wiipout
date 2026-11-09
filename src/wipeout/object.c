@@ -32,6 +32,28 @@ enum {
 	PSX_PRM_FLAG_GOURAUD  = 1 << 2,
 };
 
+static void object_sort_primitives(Object *object) {
+	for (int i = 0; i < object->primitives_len; i++) {
+		primitive_t *prm = &object->primitives[i];
+		if (prm->type == PRM_TYPE_SPR || flags_is(prm->flag, PRM_TRANSLUCENT)) return;
+	}
+
+	// Engine primitives gain alpha after loading; keep their positions and order.
+	for (int i = 1; i < object->primitives_len; i++) {
+		primitive_t prm = object->primitives[i];
+		if (flags_is(prm.flag, PRM_SHIP_ENGINE)) continue;
+		int j = i;
+		while (j > 0 &&
+			flags_not(object->primitives[j-1].flag, PRM_SHIP_ENGINE) &&
+			(uint16_t)object->primitives[j-1].u.quad.texture > (uint16_t)prm.u.quad.texture
+		) {
+			object->primitives[j] = object->primitives[j-1];
+			j--;
+		}
+		object->primitives[j] = prm;
+	}
+}
+
 Object *objects_load(char *name, texture_list_t tl) {
 	uint32_t length = 0;
 	uint8_t *bytes = platform_load_asset(name, &length);
@@ -44,6 +66,12 @@ Object *objects_load(char *name, texture_list_t tl) {
 	Object *objectList = mem_mark();
 	Object *prevObject = NULL;
 	uint32_t p = 0;
+	char *filename = strrchr(name, '/');
+	filename = filename ? filename + 1 : name;
+	// These models use fixed primitive indices, collision order, or runtime alpha.
+	bool preserve_order = !strcmp(filename, "sky.prm") || !strcmp(filename, "mine.prm") ||
+		!strcmp(filename, "rescu.prm") || !strcmp(filename, "shld.prm") ||
+		!strcmp(filename, "alcol.prm");
 
 	while (p < length) {
 		Object *object = mem_bump(sizeof(Object));
@@ -104,6 +132,8 @@ Object *objects_load(char *name, texture_list_t tl) {
 
 		// Normals would be loaded here, if there were any.
 
+		bool sortable = !preserve_order && !str_starts_with(object->name, "start") &&
+			!str_starts_with(object->name, "redl");
 		object->primitives = mem_bump(object->primitives_len * sizeof(primitive_t));
 		for (int i = 0; i < object->primitives_len; i++) {
 			primitive_t *prm = &object->primitives[i];
@@ -185,6 +215,7 @@ Object *objects_load(char *name, texture_list_t tl) {
 				object->vertices[prm->u.spr.coord].y += ((psx_prm_type == PSX_PRM_TYPE_TSPR ? prm->u.spr.height : -prm->u.spr.height) >> 1);
 				break;
 			case PSX_PRM_TYPE_SPLINE:
+				sortable = false;
 				p += 52;
 				/* TODO: Implement spline.
 				prm->type = psx_prm_type;
@@ -207,6 +238,21 @@ Object *objects_load(char *name, texture_list_t tl) {
 				die("Unknown primitive type %x", prm->type);
 			} // switch
 		} // each prim
+#ifdef RENDERER_GX
+		object->frustum_radius = 0;
+		for (int i = 0; i < object->vertices_len; i++) {
+			object->frustum_radius = max(object->frustum_radius, vec3_len(object->vertices[i]));
+		}
+		for (int i = 0; i < object->primitives_len; i++) {
+			primitive_t *prm = &object->primitives[i];
+			if (prm->type == PRM_TYPE_SPR) {
+				float w = prm->u.spr.width * 0.5f, h = prm->u.spr.height * 0.5f;
+				float bound = vec3_len(object->vertices[prm->u.spr.coord]) + sqrtf(w * w + h * h);
+				object->frustum_radius = max(object->frustum_radius, bound);
+			}
+		}
+#endif
+		if (sortable) object_sort_primitives(object);
 	} // each object
 
 	mem_temp_free(bytes);
@@ -214,9 +260,18 @@ Object *objects_load(char *name, texture_list_t tl) {
 }
 
 
+#ifdef RENDERER_GX
+bool object_gx_visible(Object *object, mat4_t *mat) {
+	float scale_sq = 0;
+	for (int c = 0; c < 3; c++) for (int r = 0; r < 3; r++) scale_sq += mat->m[c * 4 + r] * mat->m[c * 4 + r];
+	return render_gx_sphere_visible(vec3_transform(vec3(0, 0, 0), mat), max(object->radius, object->frustum_radius) * sqrtf(scale_sq));
+}
+#endif
+
 void object_draw(Object *object, mat4_t *mat) {
 	vec3_t *vertex = object->vertices;
 	render_set_model_mat(mat);
+	render_gx_object_fade_hint(mat, object->radius);
 
 	for (int i = 0; i < object->primitives_len; i++) {
 		primitive_t *prm = &object->primitives[i];
@@ -266,4 +321,5 @@ void object_draw(Object *object, mat4_t *mat) {
 			die("Can't happen: Unknown primitive type %x", prm->type);
 		}
 	}
+	render_gx_fade_inside(false);
 }

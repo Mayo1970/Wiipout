@@ -168,6 +168,7 @@ void ships_draw(void) {
 			continue;
 		}
 
+		if (!object_gx_visible(g.ships[i].model, &g.ships[i].mat)) continue;
 		PROF_ADD(ships, 1);
 		ship_draw(&g.ships[i]);
 	}
@@ -459,6 +460,10 @@ void ship_update(ship_t *self) {
 			jitter.z *= 4;
 			*self->exhaust_plume[i].v = vec3_add(self->exhaust_plume[i].initial, jitter);
 			self->exhaust_plume[i].v->z -= exhaust_len;
+#ifdef RENDERER_GX
+			float radius_sq = vec3_len_sq(*self->exhaust_plume[i].v);
+			if (radius_sq > self->model->radius * self->model->radius) self->model->radius = sqrtf(radius_sq);
+#endif
 		}
 	}
 
