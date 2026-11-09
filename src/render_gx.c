@@ -11,7 +11,7 @@
 #define TEXTURES_MAX 1024
 #define TRIS_MAX 2048
 #define FIFO_SIZE (256 * 1024)
-#define VERTEX_ARENA_SIZE (512 * 1024)
+#define VERTEX_ARENA_SIZE (1536 * 1024)
 #define NEAR_PLANE 16.0f
 // Far above any track or UI coordinate; NaN also fails the < test.
 #define VERTEX_LIMIT 1.0e7f
