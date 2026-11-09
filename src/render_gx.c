@@ -225,8 +225,10 @@ static void set_projection(void) {
 		guPerspective(projection, 73.75f, aspect, NEAR_PLANE, RENDER_FADEOUT_FAR);
 		projection[0][2] -= screen_position.x;
 		projection[1][2] += screen_position.y;
-		// A small NDC depth shift approximates GL polygon offset toward the camera.
+		// GX has no slope-scaled polygon offset; the [2][3] term adds a view-space bias of about
+		// distance/32 so shadows stay above the track up close (the constant term alone was ~0).
 		projection[2][2] -= depth_offset * 0.000001f;
+		projection[2][3] += depth_offset * (1.0f / 64.0f);
 		update_frustum(projection);
 		GX_LoadProjectionMtx(projection, GX_PERSPECTIVE);
 	}
