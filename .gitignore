@@ -60,3 +60,7 @@ AGENTS.md
 AGENTS.MD
 .codex/
 .agents/
+
+/mk64/
+*.trc
+__pycache__/

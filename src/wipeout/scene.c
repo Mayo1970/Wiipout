@@ -41,7 +41,7 @@ void scene_move_oil_pump(Object *obj);
 void scene_update_aurora_borealis(void);
 
 void scene_load(const char *base_path, float sky_y_offset) {
-	bool multiplayer = g.players == 2 && !g.is_attract_mode &&
+	bool multiplayer = def.circuits[g.circuit].release != GAME_MK64 && g.players == 2 && !g.is_attract_mode &&
 		platform_asset_exists(get_path(base_path, "sceneMul.cmp")) &&
 		platform_asset_exists(get_path(base_path, "sceneMul.prm"));
 	if (def.circuits[g.circuit].release == GAME_WIPEOUT_64) {
@@ -70,6 +70,9 @@ void scene_load(const char *base_path, float sky_y_offset) {
 		sky_object = objects_load(get_path(base_path, "sky.prm"), sky_textures);
 
 		texture_list_t scene_textures = image_get_compressed_textures(get_path(base_path, multiplayer ? "sceneMul.cmp" : "scene.cmp"));
+		if (def.circuits[g.circuit].release == GAME_MK64) {
+			for (int i = 0; i < scene_textures.len; i++) render_texture_set_repeat(scene_textures.start + i, true);
+		}
 		scene_objects = objects_load(get_path(base_path, multiplayer ? "sceneMul.prm" : "scene.prm"), scene_textures);
 	}
 	
@@ -84,6 +87,11 @@ void scene_load(const char *base_path, float sky_y_offset) {
 	Object *obj = scene_objects;
 	while (obj) {
 		mat4_set_translation(&obj->mat, obj->origin);
+
+		if (def.circuits[g.circuit].release == GAME_MK64) {
+			obj = obj->next;
+			continue;
+		}
 
 		if (str_starts_with(obj->name, "start")) {
 			error_if(start_booms_len >= SCENE_START_BOOMS_MAX, "SCENE_START_BOOMS_MAX reached");

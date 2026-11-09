@@ -28,6 +28,14 @@
 #define TURN_ACCEL(V) NTSC_ACCELERATION(ANGLE_NORM_TO_RADIAN(FIXED_TO_FLOAT(YAW_VELOCITY(V))))
 #define TURN_VEL(V)   NTSC_VELOCITY(ANGLE_NORM_TO_RADIAN(FIXED_TO_FLOAT(YAW_VELOCITY(V))))
 
+// Section 0 is the converted start line; -1 selects the preceding section.
+#define MK64_CIRCUIT(NAME, PATH) { \
+	.name = NAME, .release = GAME_MK64, .settings = { \
+		[RACE_CLASS_VENOM] = {.path = "mk64/" PATH "/", .start_line_pos = -1, .behind_speed = 300, .spread_base = 80, .spread_factor = 20}, \
+		[RACE_CLASS_RAPIER] = {.path = "mk64/" PATH "/", .start_line_pos = -1, .behind_speed = 500, .spread_base = 80, .spread_factor = 11}, \
+	} \
+}
+
 const game_def_t def = {
 	.race_classes = {
 		[RACE_CLASS_VENOM] =  {.name = "VENOM CLASS"},
@@ -369,6 +377,23 @@ const game_def_t def = {
 				[RACE_CLASS_RAPIER] = {.path = "wipeout64/track07/", .start_line_pos = 27, .behind_speed = 500, .spread_base = 80, .spread_factor = 11, .sky_y_offset = 0},
 			}
 		},
+		[CIRCUIT_MARIO_RACEWAY] = MK64_CIRCUIT("MARIO RACEWAY", "mario_raceway"),
+		[CIRCUIT_CHOCO_MOUNTAIN] = MK64_CIRCUIT("CHOCO MOUNTAIN", "choco_mountain"),
+		[CIRCUIT_BOWSERS_CASTLE] = MK64_CIRCUIT("BOWSERS CASTLE", "bowsers_castle"),
+		[CIRCUIT_BANSHEE_BOARDWALK] = MK64_CIRCUIT("BANSHEE BOARDWALK", "banshee_boardwalk"),
+		[CIRCUIT_YOSHI_VALLEY] = MK64_CIRCUIT("YOSHI VALLEY", "yoshi_valley"),
+		[CIRCUIT_FRAPPE_SNOWLAND] = MK64_CIRCUIT("FRAPPE SNOWLAND", "frappe_snowland"),
+		[CIRCUIT_KOOPA_TROOPA_BEACH] = MK64_CIRCUIT("KOOPA TROOPA BEACH", "koopa_troopa_beach"),
+		[CIRCUIT_ROYAL_RACEWAY] = MK64_CIRCUIT("ROYAL RACEWAY", "royal_raceway"),
+		[CIRCUIT_LUIGI_RACEWAY] = MK64_CIRCUIT("LUIGI RACEWAY", "luigi_raceway"),
+		[CIRCUIT_MOO_MOO_FARM] = MK64_CIRCUIT("MOO MOO FARM", "moo_moo_farm"),
+		[CIRCUIT_TOADS_TURNPIKE] = MK64_CIRCUIT("TOADS TURNPIKE", "toads_turnpike"),
+		[CIRCUIT_KALIMARI_DESERT] = MK64_CIRCUIT("KALIMARI DESERT", "kalimari_desert"),
+		[CIRCUIT_SHERBET_LAND] = MK64_CIRCUIT("SHERBET LAND", "sherbet_land"),
+		[CIRCUIT_RAINBOW_ROAD] = MK64_CIRCUIT("RAINBOW ROAD", "rainbow_road"),
+		[CIRCUIT_WARIO_STADIUM] = MK64_CIRCUIT("WARIO STADIUM", "wario_stadium"),
+		[CIRCUIT_DKS_JUNGLE_PARKWAY] = MK64_CIRCUIT("DKS JUNGLE PARKWAY", "dks_jungle_parkway"),
+
 	},
 	.music = {
 		{.path = "wipeout/music/track01.qoa", .name = "CAIRODROME"},
@@ -914,11 +939,34 @@ void game_init(void) {
 	for (int i = 0; i < len(def.circuits); i++) {
 		g.installed_circuits[i] = true;
 		for (int o = 0; o < len(def.race_classes); o++) {
-			g.installed_circuits[i] &= platform_asset_exists(def.circuits[i].settings[o].path);
+			const char *path = def.circuits[i].settings[o].path;
+			if (def.circuits[i].release == GAME_MK64) {
+				const char *files[] = {"track.trv", "track.trf", "track.trs", "track.trc", "library.ttf", "library.cmp", "scene.prm", "scene.cmp", "sky.prm", "sky.cmp"};
+				for (int f = 0; f < len(files); f++) {
+					if (!platform_asset_exists(get_path(path, files[f]))) g.installed_circuits[i] = false;
+				}
+			}
+			else {
+				g.installed_circuits[i] &= platform_asset_exists(path);
+			}
 		}
+		if (def.circuits[i].release == GAME_MK64 && g.installed_circuits[i]) g.mk64_circuits = true;
 		if (g.installed_circuits[i]) printf(" %s,", def.circuits[i].name);
 	}
 	printf("\n");
+
+	for (int race_class = 0; race_class < NUM_RACE_CLASSES; race_class++) {
+		for (int circuit = CIRCUIT_MARIO_RACEWAY; circuit < NUM_CIRCUITS; circuit++) {
+			for (int tab = 0; tab < NUM_HIGHSCORE_TABS; tab++) {
+				highscores_t *hs = &save.highscores[race_class][circuit][tab];
+				hs->lap_record = 3599.99;
+				for (int e = 0; e < NUM_HIGHSCORES; e++) {
+					strcpy(hs->entries[e].name, "NUL");
+					hs->entries[e].time = 3599.99;
+				}
+			}
+		}
+	}
 
 	uint32_t size;
 	char *save_buffer = (char *)platform_load_userdata("save.json", &size);
