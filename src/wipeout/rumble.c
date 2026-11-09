@@ -32,7 +32,7 @@ void rumble_pulses(float strength, int count, float on, float off) {
 }
 
 static void rumble_step_pulses(float dt) {
-	if (pulse_count <= 0) return;
+	if (pulse_count <= 0 && !pulse_on_phase) return;
 	pulse_timer -= dt;
 	if (pulse_timer > 0) return;
 	if (pulse_on_phase) {
