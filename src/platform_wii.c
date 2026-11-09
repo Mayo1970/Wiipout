@@ -367,8 +367,12 @@ static void platform_smoke_update(void) {
 #endif
 
 #define WII_PAD_COUNT (INPUT_GAMEPAD_R_STICK_RIGHT - INPUT_GAMEPAD_A + 1)
+#define WII_TILT_BRAKE_ON 0.40f
+#define WII_TILT_BRAKE_OFF 0.30f
 #ifdef WII_DIAG
 static float diag_cc_l = -1, diag_cc_r = -1;
+static u8 diag_cc_type, diag_cc_ls_raw, diag_cc_rs_raw;
+static u32 diag_cc_btns;
 #endif
 
 static void platform_pad_value(float *pad, button_t button, float value) {
@@ -416,12 +420,14 @@ static void platform_rumble_off(void) {
 static void platform_pump_events(void) {
 	static float last[WII_PAD_COUNT];
 	static bool cc_format_sent;
+	static bool tilt_brake_left, tilt_brake_right;
 	float pad[WII_PAD_COUNT] = {0};
 	u32 type;
 	WPAD_ScanPads();
 	PAD_ScanPads();
 	WPADData *data = WPAD_Data(WPAD_CHAN_0);
 	bool connected = WPAD_Probe(WPAD_CHAN_0, &type) == WPAD_ERR_NONE && data && data->err == WPAD_ERR_NONE;
+	if (!connected || type != WPAD_EXP_NONE) tilt_brake_left = tilt_brake_right = false;
 	if (connected && type == WPAD_EXP_CLASSIC) {
 		if (!cc_format_sent) {
 			// Retry the format after the Classic Controller handshake completes.
@@ -444,10 +450,16 @@ static void platform_pump_events(void) {
 			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
 			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
+			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZL);
+			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZR);
 			// The analog L/R read 1.0 at rest on hardware (both air brakes on), so only the digital click counts.
 #ifdef WII_DIAG
 			diag_cc_l = data->exp.classic.l_shoulder;
 			diag_cc_r = data->exp.classic.r_shoulder;
+			diag_cc_type = data->exp.classic.type;
+			diag_cc_ls_raw = data->exp.classic.ls_raw;
+			diag_cc_rs_raw = data->exp.classic.rs_raw;
+			diag_cc_btns = data->exp.classic.btns;
 #endif
 			platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
 			platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
@@ -464,8 +476,17 @@ static void platform_pump_events(void) {
 			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, nunchuk ? WPAD_BUTTON_RIGHT : WPAD_BUTTON_DOWN);
 			platform_pad_button(pad, INPUT_GAMEPAD_A, held, nunchuk ? WPAD_BUTTON_A : WPAD_BUTTON_2);
 			platform_pad_button(pad, INPUT_GAMEPAD_X, held, nunchuk ? WPAD_BUTTON_B : WPAD_BUTTON_1);
-			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, nunchuk ? WPAD_NUNCHUK_BUTTON_Z : WPAD_BUTTON_A);
-			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, nunchuk ? WPAD_NUNCHUK_BUTTON_C : WPAD_BUTTON_B);
+			if (nunchuk) {
+				platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_NUNCHUK_BUTTON_Z);
+				platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_NUNCHUK_BUTTON_C);
+			}
+			else {
+				float y = data->gforce.y;
+				tilt_brake_left = tilt_brake_left ? y <= -WII_TILT_BRAKE_OFF : y <= -WII_TILT_BRAKE_ON;
+				tilt_brake_right = tilt_brake_right ? y >= WII_TILT_BRAKE_OFF : y >= WII_TILT_BRAKE_ON;
+				if (tilt_brake_left) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, 1.0f);
+				if (tilt_brake_right) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, 1.0f);
+			}
 			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_BUTTON_MINUS);
 			platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_BUTTON_PLUS);
 			if (nunchuk) platform_pad_joystick(pad, &data->exp.nunchuk.js, false);
@@ -897,7 +918,9 @@ void platform_wii_mem_log(const char *tag) {
 		(unsigned long)s.temp_peak, (unsigned long)s.total_peak, (unsigned long)s.hunk_size,
 		heap, mem1, mem2, low);
 #ifdef WII_DIAG
-	printf("diag %s: dropped_tris=%lu cc_l=%.3f cc_r=%.3f\n", tag, (unsigned long)wii_diag_dropped_tris, diag_cc_l, diag_cc_r);
+	printf("diag %s: dropped_tris=%lu cc_l=%.3f cc_r=%.3f cc_type=%u cc_ls_raw=%u cc_rs_raw=%u cc_btns=%lu\n",
+		tag, (unsigned long)wii_diag_dropped_tris, diag_cc_l, diag_cc_r, (unsigned int)diag_cc_type,
+		(unsigned int)diag_cc_ls_raw, (unsigned int)diag_cc_rs_raw, (unsigned long)diag_cc_btns);
 #endif
 #ifdef WII_SMOKE
 #ifdef WII_SMOKE_INTRO
