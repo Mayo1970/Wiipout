@@ -1,3 +1,4 @@
+#include "../wii_profile.h"
 #include "../utils.h"
 #include "../system.h"
 
@@ -148,10 +149,12 @@ void scene_draw(camera_t *camera) {
 		vec3_t diff = vec3_sub(camera->position, object->origin);
 		float cam_dot = vec3_dot(diff, cam_dir);
 		float dist_sq = vec3_dot(diff, diff);
+		PROF_ADD(objects_total, 1);
 		if (
 			cam_dot < object->radius && 
 			dist_sq < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR)
 		) {
+			PROF_ADD(objects_drawn, 1);
 			object_draw(object, &object->mat);
 		}
 		object = object->next;

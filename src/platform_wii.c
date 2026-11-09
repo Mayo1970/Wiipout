@@ -1,3 +1,4 @@
+#include "wii_profile.h"
 #define WII_MAIN_STACK_BYTES (256 * 1024)
 static unsigned char stack[WII_MAIN_STACK_BYTES] __attribute__((aligned(8)));
 void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
@@ -155,6 +156,9 @@ static void platform_smoke_intro_sample(double now) {
 static bool smoke_menu_seen;
 static bool smoke_race_seen;
 static u32 smoke_race_frame;
+#if defined(WII_PROFILE) && defined(WII_PROFILE_FRAMES) && WII_PROFILE_FRAMES > 0
+static u32 smoke_profile_start;
+#endif
 #ifdef WII_SMOKE_FULL
 static bool smoke_full_intro_seen;
 static bool smoke_full_title_seen;
@@ -283,6 +287,9 @@ static void platform_smoke_update(void) {
 		if (ship->update_func == ship_player_update_race) {
 			ship->update_func = ship_ai_update_race;
 			printf("SMOKE autopilot frame %u\n", (unsigned int)smoke_frame);
+#if defined(WII_PROFILE) && defined(WII_PROFILE_FRAMES) && WII_PROFILE_FRAMES > 0
+			smoke_profile_start = smoke_frame;
+#endif
 		}
 #ifdef WII_SMOKE_FULL
 		if (!smoke_finish_done && ship->max_lap >= NUM_LAPS) {
@@ -800,6 +807,133 @@ static void diag_frame_done(void) {
 }
 #endif
 
+#ifdef WII_PROFILE
+#ifndef WII_PROFILE_WINDOW
+#define WII_PROFILE_WINDOW 300
+#endif
+wii_profile_frame_t wii_profile_frame;
+typedef struct {
+	wii_profile_frame_t sum;
+	uint64_t frames;
+	double frame_ms, frame_max, update_max, submit_max, wait_max;
+} profile_stats_t;
+static profile_stats_t profile_window, profile_total;
+static double profile_start;
+
+static void profile_accumulate(profile_stats_t *s, double frame_ms) {
+	s->frames++;
+	s->frame_ms += frame_ms;
+	if (s->frame_max < frame_ms) s->frame_max = frame_ms;
+	s->sum.update_ms += wii_profile_frame.update_ms;
+	if (s->update_max < wii_profile_frame.update_ms) s->update_max = wii_profile_frame.update_ms;
+	s->sum.submit_ms += wii_profile_frame.submit_ms;
+	if (s->submit_max < wii_profile_frame.submit_ms) s->submit_max = wii_profile_frame.submit_ms;
+	s->sum.wait_ms += wii_profile_frame.wait_ms;
+	if (s->wait_max < wii_profile_frame.wait_ms) s->wait_max = wii_profile_frame.wait_ms;
+	s->sum.draws += wii_profile_frame.draws;
+	s->sum.tris += wii_profile_frame.tris;
+	s->sum.flush_texture += wii_profile_frame.flush_texture;
+	s->sum.flush_model += wii_profile_frame.flush_model;
+	s->sum.flush_state += wii_profile_frame.flush_state;
+	s->sum.flush_full += wii_profile_frame.flush_full;
+	s->sum.flush_end += wii_profile_frame.flush_end;
+	s->sum.flush_other += wii_profile_frame.flush_other;
+	s->sum.arena_waits += wii_profile_frame.arena_waits;
+	s->sum.pushes += wii_profile_frame.pushes;
+	s->sum.dropped += wii_profile_frame.dropped;
+	s->sum.track_total += wii_profile_frame.track_total;
+	s->sum.track_drawn += wii_profile_frame.track_drawn;
+	s->sum.track_far += wii_profile_frame.track_far;
+	s->sum.faces += wii_profile_frame.faces;
+	s->sum.objects_total += wii_profile_frame.objects_total;
+	s->sum.objects_drawn += wii_profile_frame.objects_drawn;
+	s->sum.ships += wii_profile_frame.ships;
+	s->sum.particles += wii_profile_frame.particles;
+	s->sum.uploads += wii_profile_frame.uploads;
+	s->sum.replacements += wii_profile_frame.replacements;
+	if (s->sum.arena_peak < wii_profile_frame.arena_peak) s->sum.arena_peak = wii_profile_frame.arena_peak;
+}
+
+static void profile_print(const char *kind, const profile_stats_t *s) {
+	if (!s->frames) return;
+	printf("PROF %s frames=%llu frame_avg_ms=%.3f frame_max_ms=%.3f update_avg_ms=%.3f update_max_ms=%.3f submit_avg_ms=%.3f submit_max_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f tris_per_draw=%.3f"
+		" draws=%llu"
+		" tris=%llu"
+		" flush_texture=%llu"
+		" flush_model=%llu"
+		" flush_state=%llu"
+		" flush_full=%llu"
+		" flush_end=%llu"
+		" flush_other=%llu"
+		" arena_waits=%llu"
+		" pushes=%llu"
+		" dropped=%llu"
+		" track_total=%llu"
+		" track_drawn=%llu"
+		" track_far=%llu"
+		" faces=%llu"
+		" objects_total=%llu"
+		" objects_drawn=%llu"
+		" ships=%llu"
+		" particles=%llu"
+		" uploads=%llu"
+		" replacements=%llu"
+		" arena_peak=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
+		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
+		s->sum.wait_ms / s->frames, s->wait_max, s->sum.draws ? (double)s->sum.tris / s->sum.draws : 0.0,
+		(unsigned long long)s->sum.draws,
+		(unsigned long long)s->sum.tris,
+		(unsigned long long)s->sum.flush_texture,
+		(unsigned long long)s->sum.flush_model,
+		(unsigned long long)s->sum.flush_state,
+		(unsigned long long)s->sum.flush_full,
+		(unsigned long long)s->sum.flush_end,
+		(unsigned long long)s->sum.flush_other,
+		(unsigned long long)s->sum.arena_waits,
+		(unsigned long long)s->sum.pushes,
+		(unsigned long long)s->sum.dropped,
+		(unsigned long long)s->sum.track_total,
+		(unsigned long long)s->sum.track_drawn,
+		(unsigned long long)s->sum.track_far,
+		(unsigned long long)s->sum.faces,
+		(unsigned long long)s->sum.objects_total,
+		(unsigned long long)s->sum.objects_drawn,
+		(unsigned long long)s->sum.ships,
+		(unsigned long long)s->sum.particles,
+		(unsigned long long)s->sum.uploads,
+		(unsigned long long)s->sum.replacements,
+		(unsigned long long)s->sum.arena_peak);
+}
+
+void wii_profile_begin(void) {
+	memset(&wii_profile_frame, 0, sizeof(wii_profile_frame));
+	profile_start = platform_now();
+}
+
+void wii_profile_end(void) {
+	double elapsed = (platform_now() - profile_start) * 1000.0;
+	profile_accumulate(&profile_window, elapsed);
+	profile_accumulate(&profile_total, elapsed);
+	if (profile_window.frames == WII_PROFILE_WINDOW) {
+		profile_print("window", &profile_window);
+		platform_wii_log_sync();
+		memset(&profile_window, 0, sizeof(profile_window));
+	}
+#if defined(WII_SMOKE) && !defined(WII_SMOKE_INTRO) && defined(WII_PROFILE_FRAMES) && WII_PROFILE_FRAMES > 0
+	if (smoke_profile_start && smoke_frame - smoke_profile_start + 1 >= WII_PROFILE_FRAMES) {
+		printf("SMOKE PASS: profile frame limit reached, race frames %u, frame %u\n",
+			(unsigned int)(smoke_frame - smoke_profile_start + 1), (unsigned int)smoke_frame);
+		platform_wii_log_sync();
+		power_requested = true;
+	}
+#endif
+}
+
+void wii_profile_total(void) {
+	profile_print("total", &profile_total);
+}
+#endif
+
 int main(int argc, char *argv[]) {
 	uintptr_t hi = (uintptr_t)SYS_GetArena2Hi();
 	uintptr_t lo = (uintptr_t)SYS_GetArena2Lo();
@@ -885,6 +1019,7 @@ int main(int argc, char *argv[]) {
 	if (!wants_to_exit && !power_requested && !reset_requested) {
 		system_init();
 		while (!wants_to_exit && !power_requested && !reset_requested) {
+			PROF_BEGIN();
 			WII_DIAG_PHASE(WII_PHASE_INPUT);
 			platform_pump_events();
 			if (wants_to_exit || power_requested || reset_requested) break;
@@ -893,12 +1028,14 @@ int main(int argc, char *argv[]) {
 			system_update();
 			WII_DIAG_PHASE(WII_PHASE_AUDIO);
 			platform_end_frame();
+			PROF_END();
 #ifdef WII_DIAG
 			diag_frame_done();
 #endif
 		}
 		system_cleanup();
 	}
+	PROF_TOTAL();
 	platform_rumble_off();
 	platform_audio_shutdown();
 	platform_log_close();

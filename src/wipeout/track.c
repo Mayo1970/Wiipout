@@ -1,3 +1,4 @@
+#include "../wii_profile.h"
 #include "../mem.h"
 #include "../utils.h"
 #include "../render.h"
@@ -292,6 +293,7 @@ void track_draw_section(section_t *section) {
 	int16_t face_count = section->face_count;
 	
 	for (uint32_t j = 0; j < face_count; j++) {
+		PROF_ADD(faces, 1);
 		uint16_t tex_index = texture_from_list(g.track.textures, face->texture);
 		render_push_tris(face->tris[0], tex_index);
 		render_push_tris(face->tris[1], tex_index);
@@ -311,10 +313,13 @@ void track_draw(camera_t *camera) {
 		section_t *s = &g.track.sections[i];
 		vec3_t diff = vec3_sub(s->center, cam_pos);
 		float cam_dot = vec3_dot(diff, cam_dir);
+		PROF_ADD(track_total, 1);
+		PROF_ADD(track_far, cam_dot > -s->radius && cam_dot < RENDER_FADEOUT_FAR + s->radius);
 		if (
 			cam_dot > -s->radius &&
 			cam_dot < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR) + s->radius
 		) {
+			PROF_ADD(track_drawn, 1);
 			track_draw_section(s);
 		}
 	}
