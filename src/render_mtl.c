@@ -585,7 +585,6 @@ uint16_t render_texture_create(uint32_t tw, uint32_t th, rgba_t *pixels) {
 	return idx;
 }
 
-void render_texture_set_repeat(uint16_t texture_index, bool repeat) { (void)texture_index; (void)repeat; }
 vec2i_t render_texture_size(uint16_t texture_index) { return textures[texture_index].size; }
 
 void render_texture_replace_pixels(int16_t texture_index, rgba_t *pixels) {

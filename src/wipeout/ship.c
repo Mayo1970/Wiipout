@@ -99,7 +99,6 @@ void ships_init(section_t *section) {
 
 
 	int start_line_pos = def.circuits[g.circuit].settings[g.race_class].start_line_pos;
-	if (start_line_pos < 0) start_line_pos = g.track.total_section_nums - 1;
 	for (int i = 0; i < start_line_pos - 15; i++) {
 		section = section->next;
 	}
@@ -589,15 +588,14 @@ void ship_update(ship_t *self) {
 	self->lap_time += system_tick();
 
 	int start_line_pos = def.circuits[g.circuit].settings[g.race_class].start_line_pos;
-	if (start_line_pos < 0) start_line_pos = g.track.total_section_nums - 1;
 
 	// Crossed line backwards
-	if (self->prev_section_num == (start_line_pos + 1) % g.track.total_section_nums && (start_line_pos == g.track.total_section_nums - 1 ? self->section_num == start_line_pos : self->section_num <= start_line_pos)) {
+	if (self->prev_section_num == start_line_pos + 1 && self->section_num <= start_line_pos) {
 		self->lap--;
 	}
 
 	// Crossed line forwards
-	else if (self->prev_section_num == start_line_pos && (start_line_pos == g.track.total_section_nums - 1 ? self->section_num == 0 : self->section_num > start_line_pos)) {
+	else if (self->prev_section_num == start_line_pos && self->section_num > start_line_pos) {
 		self->lap++;
 
 		// Is it the first time we're crossing the line for this lap?
@@ -622,7 +620,7 @@ void ship_update(ship_t *self) {
 		}
 	}
 
-	int section_num_from_line = self->section_num - ((start_line_pos + 1) % g.track.total_section_nums);
+	int section_num_from_line = self->section_num - (start_line_pos + 1);
 	if (section_num_from_line < 0) {
 		section_num_from_line += g.track.section_count;
 	}
