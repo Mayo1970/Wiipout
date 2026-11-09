@@ -44,6 +44,7 @@ static vec2_t screen_position;
 static render_blend_mode_t blend_mode;
 static render_stats_t running_stats, end_stats;
 static bool view_2d;
+static float view_2d_scale = 1.0f;
 static void *fifo;
 static int back = 1;
 static mat4_t model_mat, view_mat, sprite_mat, projection_mat_3d;
@@ -212,6 +213,10 @@ static void set_projection(void) {
 		0, 0, 2 * RENDER_FADEOUT_FAR * NEAR_PLANE * nf, 0);
 	if (view_2d) {
 		guOrtho(projection, 0, screen_size.y, 0, screen_size.x, -1, 1);
+		projection[0][0] *= view_2d_scale;
+		projection[0][3] *= view_2d_scale;
+		projection[1][1] *= view_2d_scale;
+		projection[1][3] *= view_2d_scale;
 		projection[0][3] += screen_position.x;
 		projection[1][3] -= screen_position.y;
 		GX_LoadProjectionMtx(projection, GX_ORTHOGRAPHIC);
@@ -328,6 +333,18 @@ void render_cleanup(void) {
 	free(fifo);
 	fifo = NULL;
 }
+void render_gx_set_2d_scale(float scale) {
+	if (view_2d_scale == scale) {
+		return;
+	}
+	PROF_ADD(flush_state, !!tris_len);
+	render_flush();
+	view_2d_scale = scale;
+	if (view_2d) {
+		set_projection();
+	}
+}
+float render_gx_get_2d_scale(void) { return view_2d_scale; }
 void render_set_screen_size(vec2i_t size) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_size = size; set_projection(); }
 void render_set_resolution(render_resolution_t res) { (void)res; }
 void render_set_post_effect(render_post_effect_t post) { (void)post; }

@@ -199,6 +199,12 @@ static void page_options_controls_set_init(menu_t *menu, int data) {
 static void page_options_control_draw(menu_t *menu, int data) {
 	menu_page_t *page = &menu->pages[menu->index];
 
+#ifdef PLATFORM_WII
+	int right = page->items_pos.x + page->block_width;
+	int line_y = page->items_pos.y;
+	vec2i_t right_head_pos = vec2i(right - ui_text_width("JOYSTICK", UI_SIZE_8), page->title_pos.y + 2);
+	ui_draw_text("JOYSTICK", ui_scaled_pos(page->items_anchor, right_head_pos), UI_SIZE_8, UI_COLOR_DEFAULT);
+#else
 	int left = page->items_pos.x + page->block_width - 100;
 	int right = page->items_pos.x + page->block_width;
 	int line_y = page->items_pos.y - 20;
@@ -209,6 +215,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 	vec2i_t right_head_pos = vec2i(right - ui_text_width("JOYSTICK", UI_SIZE_8), line_y);
 	ui_draw_text("JOYSTICK", ui_scaled_pos(page->items_anchor, right_head_pos), UI_SIZE_8, UI_COLOR_DEFAULT);
 	line_y += 20;
+#endif
 
 	for (int action = 0; action < NUM_GAME_ACTIONS; action++) {
 		rgba_t text_color = UI_COLOR_DEFAULT;
@@ -216,6 +223,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 			text_color = UI_COLOR_ACCENT;
 		}
 
+#ifndef PLATFORM_WII
 		if (save.buttons[action][0] != INPUT_INVALID) {
 			const char *name = input_button_to_name(save.buttons[action][0]);
 			if (!name) {
@@ -224,6 +232,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 			vec2i_t pos = vec2i(left - ui_text_width(name, UI_SIZE_8), line_y);
 			ui_draw_text(name, ui_scaled_pos(page->items_anchor, pos), UI_SIZE_8, text_color);
 		}
+#endif
 		if (save.buttons[action][1] != INPUT_INVALID) {
 			const char *name = input_button_to_name(save.buttons[action][1]);
 			if (!name) {
@@ -264,9 +273,17 @@ static const char *modern_camera[] = {"CLASSIC", "MODERN"};
 static void page_options_controls_init(menu_t *menu) {
 	menu_page_t *page = menu_push(menu, "CONTROLS", page_options_control_draw);
 	flags_set(page->layout_flags, MENU_VERTICAL | MENU_FIXED);
+#ifdef PLATFORM_WII
+	page->title_pos = vec2i(-160, -104);
+#else
 	page->title_pos = vec2i(-160, -100);
+#endif
 	page->title_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
+#ifdef PLATFORM_WII
+	page->items_pos = vec2i(-160, -84);
+#else
 	page->items_pos = vec2i(-160, -50);
+#endif
 	page->block_width = 320;
 	page->items_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
 
