@@ -317,7 +317,7 @@ void track_draw(camera_t *camera) {
 		PROF_ADD(track_far, cam_dot > -s->radius && cam_dot < RENDER_FADEOUT_FAR + s->radius);
 		if (
 			cam_dot > -s->radius &&
-			cam_dot < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR) + s->radius
+			cam_dot < RENDER_FADEOUT_FAR + s->radius
 		) {
 			PROF_ADD(track_drawn, 1);
 			track_draw_section(s);
