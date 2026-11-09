@@ -32,7 +32,6 @@ typedef struct {
 	uint32_t width, height, padded_width, padded_height;
 	float inv_padded_width, inv_padded_height;
 	u8 format;
-	bool repeat;
 } gx_texture_t;
 
 uint16_t RENDER_NO_TEXTURE;
@@ -271,7 +270,7 @@ static void encode_texture(gx_texture_t *t, rgba_t *pixels) {
 		}
 	}
 	DCFlushRange(t->data, t->padded_width * t->padded_height * 2);
-	GX_InitTexObj(&t->obj, t->data, t->padded_width, t->padded_height, t->format, t->repeat ? GX_REPEAT : GX_CLAMP, t->repeat ? GX_REPEAT : GX_CLAMP, GX_FALSE);
+	GX_InitTexObj(&t->obj, t->data, t->padded_width, t->padded_height, t->format, GX_CLAMP, GX_CLAMP, GX_FALSE);
 	GX_InitTexObjLOD(&t->obj, GX_LINEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
 	GX_InvalidateTexAll();
 }
@@ -582,22 +581,13 @@ uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) 
 	error_if(textures_len >= TEXTURES_MAX || width > 1024 || height > 1024 || (width && height && !pixels), "Invalid GX texture %ux%u", (unsigned)width, (unsigned)height);
 	uint16_t index = textures_len++;
 	gx_texture_t *t = &textures[index];
-	t->width = width; t->height = height; t->repeat = false;
+	t->width = width; t->height = height;
 	t->padded_width = width ? (width + 3) & ~3u : 4; t->padded_height = height ? (height + 3) & ~3u : 4;
 	t->inv_padded_width = 1.0f / t->padded_width; t->inv_padded_height = 1.0f / t->padded_height;
 	t->data = memalign(32, t->padded_width * t->padded_height * 2);
 	error_if(!t->data, "GX texture allocation failed");
 	encode_texture(t, pixels);
 	return index;
-}
-void render_texture_set_repeat(uint16_t index, bool repeat) {
-	if (index >= textures_len) return;
-	gx_texture_t *t = &textures[index];
-	if (repeat && (!t->width || !t->height || (t->width & (t->width - 1)) || (t->height & (t->height - 1)) || t->width != t->padded_width || t->height != t->padded_height)) return;
-	if (tris_len && batch_texture == index) render_flush();
-	t->repeat = repeat;
-	GX_InitTexObj(&t->obj, t->data, t->padded_width, t->padded_height, t->format, repeat ? GX_REPEAT : GX_CLAMP, repeat ? GX_REPEAT : GX_CLAMP, GX_FALSE);
-	GX_InitTexObjLOD(&t->obj, GX_LINEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
 }
 vec2i_t render_texture_size(uint16_t index) {
 	error_if(index >= textures_len, "Invalid texture %d", index);

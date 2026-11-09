@@ -9,12 +9,12 @@ TIMEOUT="${SMOKE_TIMEOUT:-$DEFAULT_TIMEOUT}"
 BUILD_DIR=build/wii-smoke
 if [ "${SMOKE_FULL:-0}" = 1 ]; then
 	BUILD_DIR=build/wii-smoke-full
-	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_FULL=1 WII_SMOKE_CIRCUIT="${SMOKE_CIRCUIT:-}"
+	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_FULL=1
 elif [ "${SMOKE_INTRO:-0}" = 1 ]; then
 	BUILD_DIR=build/wii-smoke-intro
-	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_INTRO=1 WII_SMOKE_CIRCUIT="${SMOKE_CIRCUIT:-}"
+	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_INTRO=1
 else
-	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_2P="${SMOKE_2P:-0}" WII_SMOKE_CIRCUIT="${SMOKE_CIRCUIT:-}"
+	"$ROOT/tools/docker-make.sh" PLATFORM=WII WII_SMOKE=1 WII_SMOKE_2P="${SMOKE_2P:-0}"
 fi
 OUT="$ROOT/$BUILD_DIR/dolphin"
 IMG=$BUILD_DIR/dolphin/sd.raw
@@ -40,7 +40,6 @@ truncate -s 512M $IMG
 mkfs.vfat -F 32 $IMG >/dev/null
 mmd -i $IMG ::/apps ::/apps/wiipeout
 mcopy -s -i $IMG wipeout ::/apps/wiipeout/
-if [ -d mk64 ]; then mcopy -s -i $IMG mk64 ::/apps/wiipeout/; fi
 "
 
 # Dolphin locks the image while it runs; the smoke build powers off when done, which ends batch mode.

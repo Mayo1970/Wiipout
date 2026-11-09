@@ -20,7 +20,6 @@ WII_SMOKE ?= 0
 WII_SMOKE_INTRO ?= 0
 WII_SMOKE_FULL ?= 0
 WII_SMOKE_2P ?= 0
-WII_SMOKE_CIRCUIT ?=
 ifeq ($(PLATFORM),WII)
 ifeq ($(WII_SMOKE_FULL),1)
 WII_BUILD_DIR = build/wii-smoke-full
@@ -162,9 +161,6 @@ else ifeq ($(WII_SMOKE_INTRO),1)
 else ifeq ($(WII_SMOKE),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE
 endif
-ifneq ($(WII_SMOKE_CIRCUIT),)
-	C_FLAGS := $(C_FLAGS) -DWII_SMOKE_CIRCUIT=$(WII_SMOKE_CIRCUIT)
-endif
 ifeq ($(WII_SMOKE_2P),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE_2P
 endif
@@ -294,11 +290,6 @@ $(WII_TARGET_DOL): $(WII_TARGET_ELF)
 $(WII_TARGET_ELF): $(WII_PLATFORM_OBJ) $(WII_COMMON_OBJ)
 	mkdir -p $(dir $@)
 	$(WII_CC) $(WII_ARCH_FLAGS) $^ -o $@ $(WII_L_FLAGS)
-
-ifneq ($(filter 1,$(WII_SMOKE) $(WII_SMOKE_FULL) $(WII_SMOKE_INTRO)),)
-.PHONY: wii-smoke-config
-$(WII_BUILD_OBJ)/src/wipeout/main_menu.o: wii-smoke-config
-endif
 
 $(WII_BUILD_OBJ)/%.o: %.c
 	mkdir -p $(dir $@)

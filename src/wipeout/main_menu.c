@@ -632,16 +632,6 @@ static void page_team_init(menu_t *menu) {
 // Pilot
 
 static void finish_pilot_select(menu_t *menu) {
-#if defined(WII_SMOKE) && defined(WII_SMOKE_CIRCUIT)
-	int circuit = WII_SMOKE_CIRCUIT;
-	error_if(circuit < 0 || circuit >= NUM_CIRCUITS, "SMOKE invalid circuit %d", circuit);
-	error_if(!g.installed_circuits[circuit], "SMOKE circuit %d is not installed", circuit);
-	g.circuit = circuit;
-	g.race_type = RACE_TYPE_SINGLE;
-	g.highscore_tab = HIGHSCORE_TAB_RACE;
-	game_set_scene(GAME_SCENE_RACE);
-	return;
-#endif
 	if (g.race_type != RACE_TYPE_CHAMPIONSHIP) {
 		page_circuit_init(menu);
 	}
@@ -715,7 +705,7 @@ static void page_circuit_additional_init(menu_t *menu) {
 	page->items_pos = vec2i(0, 50);
 	page->items_anchor = UI_POS_TOP | UI_POS_CENTER;
 
-	for (int i = CIRCUIT_TALONS_REACH; i < CIRCUIT_MARIO_RACEWAY; i++) {
+	for (int i = CIRCUIT_TALONS_REACH; i < len(def.circuits); i++) {
 		if (g.installed_circuits[i] &&
 			(!def.circuits[i].is_bonus_circuit || save.has_bonus_circuits)) {
 			menu_page_add_button(page, i, def.circuits[i].name, button_circuit_select);
@@ -727,20 +717,7 @@ static void button_circuit_additional_select(menu_t *menu, int data) {
 	page_circuit_additional_init(menu);
 }
 
-static void button_circuit_mk64_select(menu_t *menu, int data) {
-	menu_page_t *page = menu_push(menu, "MK64 CIRCUITS", page_circuit_additional_draw);
-	flags_add(page->layout_flags, MENU_FIXED);
-	page->title_pos = vec2i(0, 30);
-	page->title_anchor = UI_POS_TOP | UI_POS_CENTER;
-	page->items_pos = vec2i(0, 50);
-	page->items_anchor = UI_POS_TOP | UI_POS_CENTER;
-	for (int i = CIRCUIT_MARIO_RACEWAY; i < NUM_CIRCUITS; i++) {
-		if (g.installed_circuits[i]) menu_page_add_button(page, i, def.circuits[i].name, button_circuit_select);
-	}
-}
-
 static void page_circuit_draw(menu_t *menu, int data) {
-	if (data < 0 || data >= track_images.len) return;
 	vec2i_t pos = vec2i(0, -25);
 	vec2i_t size = vec2i(128, 74);
 	vec2i_t scaled_size = ui_scaled(size);
@@ -762,9 +739,6 @@ static void page_circuit_init(menu_t *menu) {
 	}
 	if (g.additional_circuits) {
 		menu_page_add_button(page, 0, "ADDITIONAL CIRCUITS", button_circuit_additional_select); 
-	}
-	if (g.mk64_circuits) {
-		menu_page_add_button(page, 0, "MK64 CIRCUITS", button_circuit_mk64_select);
 	}
 }
 

@@ -74,7 +74,6 @@ uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) 
 	(void) width; (void) height; (void) pixels;
 	return 0;
 }
-void render_texture_set_repeat(uint16_t texture_index, bool repeat) { (void)texture_index; (void)repeat; }
 vec2i_t render_texture_size(uint16_t texture_index) {
 	(void) texture_index;
 	return vec2i(0, 0);
