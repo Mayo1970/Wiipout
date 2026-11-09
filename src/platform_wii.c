@@ -482,8 +482,8 @@ static void platform_pump_events(void) {
 			}
 			else {
 				float y = data->gforce.y;
-				tilt_brake_left = tilt_brake_left ? y <= -WII_TILT_BRAKE_OFF : y <= -WII_TILT_BRAKE_ON;
-				tilt_brake_right = tilt_brake_right ? y >= WII_TILT_BRAKE_OFF : y >= WII_TILT_BRAKE_ON;
+				tilt_brake_left = tilt_brake_left ? y >= WII_TILT_BRAKE_OFF : y >= WII_TILT_BRAKE_ON;
+				tilt_brake_right = tilt_brake_right ? y <= -WII_TILT_BRAKE_OFF : y <= -WII_TILT_BRAKE_ON;
 				if (tilt_brake_left) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, 1.0f);
 				if (tilt_brake_right) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, 1.0f);
 			}
