@@ -13,6 +13,9 @@ WII_TARGET_ELF = $(WII_BUILD_DIR)/boot.elf
 WII_TARGET_DOL = $(WII_BUILD_DIR)/boot.dol
 WII_CC ?= $(DEVKITPRO)/devkitPPC/bin/powerpc-eabi-gcc
 WII_ELF2DOL ?= $(DEVKITPRO)/tools/bin/elf2dol
+WII_PROFILE ?= 0
+WII_PROFILE_FRAMES ?= 0
+WII_PROFILE_WINDOW ?=
 WII_SMOKE ?= 0
 WII_SMOKE_INTRO ?= 0
 WII_SMOKE_FULL ?= 0
@@ -25,6 +28,9 @@ else
 ifeq ($(WII_SMOKE),1)
 WII_BUILD_DIR = build/wii-smoke
 endif
+endif
+ifeq ($(WII_PROFILE),1)
+WII_BUILD_DIR := $(WII_BUILD_DIR)-profile
 endif
 endif
 
@@ -136,6 +142,15 @@ endif
 else
 	WII_ARCH_FLAGS = -mrvl -mcpu=750 -meabi -mhard-float
 	C_FLAGS := $(C_FLAGS) -I$(DEVKITPRO)/libogc/include $(WII_ARCH_FLAGS) -DPLATFORM_WII
+	ifeq ($(WII_PROFILE),1)
+	C_FLAGS := $(C_FLAGS) -DWII_PROFILE
+ifneq ($(WII_PROFILE_FRAMES),0)
+	C_FLAGS := $(C_FLAGS) -DWII_PROFILE_FRAMES=$(WII_PROFILE_FRAMES)
+endif
+ifneq ($(WII_PROFILE_WINDOW),)
+	C_FLAGS := $(C_FLAGS) -DWII_PROFILE_WINDOW=$(WII_PROFILE_WINDOW)
+endif
+endif
 	WII_L_FLAGS = -L$(DEVKITPRO)/libogc/lib/wii -lwiiuse -lbte -lfat -lasnd -logc -lm
 
 ifeq ($(WII_SMOKE_FULL),1)

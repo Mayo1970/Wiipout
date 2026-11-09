@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "render.h"
+#include "wii_profile.h"
 #include "platform_wii.h"
 #include "utils.h"
 
@@ -116,12 +117,15 @@ static void drop_invalid_tris(void) {
 #ifdef WII_DIAG
 	wii_diag_dropped_tris += tris_len - kept;
 #endif
+	PROF_ADD(dropped, tris_len - kept);
 	tris_len = kept;
 }
 
 static void render_flush(void) {
+	PROF_WAIT_SNAPSHOT(submit_wait);
+	PROF_TIME_START(submit_start);
 	drop_invalid_tris();
-	if (!tris_len) return;
+	if (!tris_len) { PROF_TIME_ADD(submit_ms, submit_start); return; }
 	gx_texture_t *texture = &textures[batch_texture];
 	uint32_t count = tris_len * 3;
 	uint32_t pos_bytes = (count * sizeof(vec3_t) + 31) & ~31u;
@@ -130,12 +134,16 @@ static void render_flush(void) {
 	uint32_t bytes = pos_bytes + color_bytes + uv_bytes;
 	if (vertex_arena_used + bytes > VERTEX_ARENA_SIZE) {
 		WII_DIAG_PHASE(WII_PHASE_FLUSH_WAIT);
+		PROF_TIME_START(wait_start);
 		GX_DrawDone();
+		PROF_TIME_ADD(wait_ms, wait_start);
+		PROF_ADD(arena_waits, 1);
 		WII_DIAG_PHASE(WII_PHASE_UPDATE);
 		vertex_arena_used = 0;
 	}
 	u8 *slice = vertex_arena + vertex_arena_used;
 	vertex_arena_used += bytes;
+	PROF_PEAK(arena_peak, vertex_arena_used);
 	vec3_t *positions = (vec3_t *)slice;
 	rgba_t *colors = (rgba_t *)(slice + pos_bytes);
 	vec2_t *uvs = (vec2_t *)(slice + pos_bytes + color_bytes);
@@ -164,6 +172,10 @@ static void render_flush(void) {
 	if (++token == 0) token = 1;
 	GX_SetDrawSync(token);
 #endif
+	PROF_ADD(draws, 1);
+	PROF_ADD(tris, tris_len);
+	PROF_TIME_ADD(submit_ms, submit_start);
+	PROF_WAIT_SUBTRACT(submit_ms, submit_wait);
 	running_stats.num_tris += tris_len;
 	running_stats.num_draw_calls++;
 	tris_len = 0;
@@ -207,6 +219,7 @@ static void set_depth(void) {
 }
 
 static void encode_texture(gx_texture_t *t, rgba_t *pixels) {
+	PROF_ADD(uploads, 1);
 	bool alpha = !t->width || !t->height;
 	for (uint32_t i = 0; i < t->width * t->height; i++) {
 		if (pixels[i].a < 255) { alpha = true; break; }
@@ -298,7 +311,7 @@ void render_cleanup(void) {
 	free(fifo);
 	fifo = NULL;
 }
-void render_set_screen_size(vec2i_t size) { render_flush(); screen_size = size; set_projection(); }
+void render_set_screen_size(vec2i_t size) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_size = size; set_projection(); }
 void render_set_resolution(render_resolution_t res) { (void)res; }
 void render_set_post_effect(render_post_effect_t post) { (void)post; }
 vec2i_t render_size(void) { return screen_size; }
@@ -317,13 +330,16 @@ void render_frame_prepare(void) {
 	set_projection();
 }
 void render_frame_end(void) {
+	PROF_ADD(flush_end, !!tris_len);
 	render_flush();
 	GX_SetZMode(GX_TRUE, GX_ALWAYS, GX_TRUE);
 	GX_SetColorUpdate(GX_TRUE);
 	WII_DIAG_PHASE(WII_PHASE_FRAME_COPY);
 	GX_CopyDisp(platform_wii_xfb(back), GX_TRUE);
 	WII_DIAG_PHASE(WII_PHASE_FRAME_WAIT);
+	PROF_TIME_START(frame_wait_start);
 	GX_DrawDone();
+	PROF_TIME_ADD(wait_ms, frame_wait_start);
 	WII_DIAG_PHASE(WII_PHASE_FRAME_FLIP);
 	VIDEO_SetNextFramebuffer(platform_wii_xfb(back));
 	VIDEO_Flush();
@@ -333,6 +349,7 @@ void render_frame_end(void) {
 }
 const render_stats_t *render_frame_get_stats(void) { return &end_stats; }
 void render_set_view(vec3_t pos, vec3_t angles) {
+	PROF_ADD(flush_state, !!tris_len);
 	render_flush();
 	view_2d = false;
 	camera_pos = pos;
@@ -345,28 +362,35 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	set_depth(); set_model_view(); set_projection();
 }
 void render_set_view_2d(void) {
+	PROF_ADD(flush_state, !!tris_len);
 	render_flush();
 	view_2d = true;
 	view_mat = model_mat = mat4_identity();
 	depth_test = depth_write = false;
 	set_depth(); set_model_view(); set_projection();
 }
-void render_set_model_mat(mat4_t *m) { render_flush(); model_mat = *m; set_model_view(); }
-void render_set_depth_write(bool enabled) { render_flush(); depth_write = enabled; set_depth(); }
-void render_set_depth_test(bool enabled) { render_flush(); depth_test = enabled; set_depth(); }
-void render_set_depth_offset(float offset) { render_flush(); depth_offset = offset; set_projection(); }
-void render_set_cull_backface(bool enabled) { render_flush(); GX_SetCullMode(enabled ? GX_CULL_BACKFACE : GX_CULL_NONE); }
-void render_set_screen_position(vec2_t pos) { render_flush(); screen_position = pos; set_projection(); }
+void render_set_model_mat(mat4_t *m) { PROF_ADD(flush_model, !!tris_len); render_flush(); model_mat = *m; set_model_view(); }
+void render_set_depth_write(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_write = enabled; set_depth(); }
+void render_set_depth_test(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_test = enabled; set_depth(); }
+void render_set_depth_offset(float offset) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_offset = offset; set_projection(); }
+void render_set_cull_backface(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); GX_SetCullMode(enabled ? GX_CULL_BACKFACE : GX_CULL_NONE); }
+void render_set_screen_position(vec2_t pos) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_position = pos; set_projection(); }
 void render_set_blend_mode(render_blend_mode_t mode) {
 	if (mode == blend_mode) return;
+	PROF_ADD(flush_state, !!tris_len);
 	render_flush();
 	blend_mode = mode;
 	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, mode == RENDER_BLEND_LIGHTER ? GX_BL_ONE : GX_BL_INVSRCALPHA, GX_LO_CLEAR);
 }
 vec3_t render_transform(vec3_t pos) { return vec4_perspective_divide(vec3_transform_perspective(vec3_transform(pos, &view_mat), &projection_mat_3d)); }
 void render_push_tris(tris_t tris, uint16_t texture) {
+	PROF_ADD(pushes, 1);
 	error_if(texture >= textures_len, "Invalid texture %d", texture);
-	if (tris_len && (batch_texture != texture || tris_len == TRIS_MAX)) render_flush();
+	if (tris_len && (batch_texture != texture || tris_len == TRIS_MAX)) {
+		PROF_ADD(flush_texture, batch_texture != texture);
+		PROF_ADD(flush_full, batch_texture == texture);
+		render_flush();
+	}
 	batch_texture = texture;
 	if (!view_2d) for (int i = 0; i < 3; i++) {
 		vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
@@ -412,16 +436,20 @@ vec2i_t render_texture_size(uint16_t index) {
 	return vec2i(textures[index].width, textures[index].height);
 }
 void render_texture_replace_pixels(int16_t index, rgba_t *pixels) {
+	PROF_ADD(replacements, 1);
 	error_if(index < 0 || index >= textures_len || !pixels, "Invalid texture %d", index);
-	if (tris_len && batch_texture == index) render_flush();
+	if (tris_len && batch_texture == index) { PROF_ADD(flush_other, 1); render_flush(); }
 	WII_DIAG_PHASE(WII_PHASE_TEXTURE_WAIT);
+	PROF_TIME_START(texture_wait_start);
 	GX_DrawDone();
+	PROF_TIME_ADD(wait_ms, texture_wait_start);
 	WII_DIAG_PHASE(WII_PHASE_UPDATE);
 	encode_texture(&textures[index], pixels);
 }
 uint16_t render_textures_len(void) { return textures_len; }
 void render_textures_reset(uint16_t len) {
 	error_if(len > textures_len, "Invalid texture count %d", len);
+	PROF_ADD(flush_other, !!tris_len);
 	render_flush();
 	GX_DrawDone();
 	for (uint16_t i = len; i < textures_len; i++) { free(textures[i].data); textures[i].data = NULL; }

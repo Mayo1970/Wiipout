@@ -1,4 +1,5 @@
 #include "system.h"
+#include "wii_profile.h"
 #include "input.h"
 #include "render.h"
 #include "platform.h"
@@ -45,7 +46,11 @@ void system_update(void) {
 	
 	render_frame_prepare();
 	
+	PROF_WAIT_SNAPSHOT(update_wait);
+	PROF_TIME_START(update_start);
 	game_update();
+	PROF_TIME_ADD(update_ms, update_start);
+	PROF_WAIT_SUBTRACT(update_ms, update_wait);
 
 	render_frame_end();
 	input_clear();

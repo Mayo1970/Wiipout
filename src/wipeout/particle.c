@@ -1,3 +1,4 @@
+#include "../wii_profile.h"
 #include "../mem.h"
 #include "../utils.h"
 #include "../system.h"
@@ -45,6 +46,7 @@ void particles_draw(void) {
 
 	for (int i = 0; i < particles_active; i++) {
 		particle_t *p = &particles[i];
+		PROF_ADD(particles, 1);
 		render_push_sprite(p->position, p->size, p->color, p->texture);
 	}
 

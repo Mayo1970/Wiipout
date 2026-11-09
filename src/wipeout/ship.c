@@ -1,3 +1,4 @@
+#include "../wii_profile.h"
 #include "../utils.h"
 #include "../system.h"
 
@@ -167,6 +168,7 @@ void ships_draw(void) {
 			continue;
 		}
 
+		PROF_ADD(ships, 1);
 		ship_draw(&g.ships[i]);
 	}
 
