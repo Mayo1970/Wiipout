@@ -813,7 +813,7 @@ static void diag_frame_done(void) {
 #endif
 wii_profile_frame_t wii_profile_frame;
 typedef struct {
-	wii_profile_frame_t sum;
+	wii_profile_frame_t sum, worst;
 	uint64_t frames;
 	double frame_ms, frame_max, update_max, submit_max, wait_max;
 	double sim_rumble_max, sim_particles_max, sim_scene_max, sim_map_max, sim_pickups_max;
@@ -823,9 +823,12 @@ static profile_stats_t profile_window, profile_total;
 static double profile_start;
 
 static void profile_accumulate(profile_stats_t *s, double frame_ms) {
+	if (!s->frames || s->frame_max < frame_ms) {
+		s->frame_max = frame_ms;
+		s->worst = wii_profile_frame;
+	}
 	s->frames++;
 	s->frame_ms += frame_ms;
-	if (s->frame_max < frame_ms) s->frame_max = frame_ms;
 	s->sum.update_ms += wii_profile_frame.update_ms;
 	if (s->update_max < wii_profile_frame.update_ms) s->update_max = wii_profile_frame.update_ms;
 	s->sum.submit_ms += wii_profile_frame.submit_ms;
@@ -974,6 +977,36 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)s->sum.arena_peak);
 }
 
+static void profile_print_worst(const char *kind, const profile_stats_t *s) {
+	if (!s->frames) return;
+	const wii_profile_frame_t *f = &s->worst;
+	printf("PROF %s frame_ms=%.3f update_ms=%.3f submit_ms=%.3f wait_ms=%.3f"
+		" sim_ships_ms=%.3f sim_droid_ms=%.3f sim_camera_ms=%.3f sim_weapons_ms=%.3f"
+		" sim_rumble_ms=%.3f sim_particles_ms=%.3f sim_scene_ms=%.3f sim_map_ms=%.3f"
+		" sim_pickups_ms=%.3f sim_other_ms=%.3f draw_scene_ms=%.3f draw_track_ms=%.3f"
+		" draw_ships_ms=%.3f draw_fx_ms=%.3f draw_2d_ms=%.3f push_ms=%.3f"
+		" draws=%llu tris=%llu flush_texture=%llu flush_model=%llu flush_state=%llu flush_full=%llu"
+		" flush_end=%llu flush_other=%llu pushes=%llu dropped=%llu track_total=%llu track_drawn=%llu"
+		" track_far=%llu faces=%llu objects_total=%llu objects_drawn=%llu ships=%llu particles=%llu"
+		" uploads=%llu replacements=%llu arena_waits=%llu arena_peak=%llu\n",
+		kind, s->frame_max, f->update_ms, f->submit_ms, f->wait_ms,
+		f->sim_ships_ms, f->sim_droid_ms, f->sim_camera_ms, f->sim_weapons_ms,
+		f->sim_rumble_ms, f->sim_particles_ms, f->sim_scene_ms, f->sim_map_ms,
+		f->sim_pickups_ms, f->sim_other_ms, f->draw_scene_ms, f->draw_track_ms,
+		f->draw_ships_ms, f->draw_fx_ms, f->draw_2d_ms, (double)f->push_ticks / (double)TB_TIMER_CLOCK,
+		(unsigned long long)f->draws, (unsigned long long)f->tris,
+		(unsigned long long)f->flush_texture, (unsigned long long)f->flush_model,
+		(unsigned long long)f->flush_state, (unsigned long long)f->flush_full,
+		(unsigned long long)f->flush_end, (unsigned long long)f->flush_other,
+		(unsigned long long)f->pushes, (unsigned long long)f->dropped,
+		(unsigned long long)f->track_total, (unsigned long long)f->track_drawn,
+		(unsigned long long)f->track_far, (unsigned long long)f->faces,
+		(unsigned long long)f->objects_total, (unsigned long long)f->objects_drawn,
+		(unsigned long long)f->ships, (unsigned long long)f->particles,
+		(unsigned long long)f->uploads, (unsigned long long)f->replacements,
+		(unsigned long long)f->arena_waits, (unsigned long long)f->arena_peak);
+}
+
 void wii_profile_begin(void) {
 	memset(&wii_profile_frame, 0, sizeof(wii_profile_frame));
 	profile_start = platform_now();
@@ -985,6 +1018,7 @@ void wii_profile_end(void) {
 	profile_accumulate(&profile_total, elapsed);
 	if (profile_window.frames == WII_PROFILE_WINDOW) {
 		profile_print("window", &profile_window);
+		profile_print_worst("worst", &profile_window);
 		platform_wii_log_sync();
 		memset(&profile_window, 0, sizeof(profile_window));
 	}
@@ -1000,6 +1034,8 @@ void wii_profile_end(void) {
 
 void wii_profile_total(void) {
 	profile_print("total", &profile_total);
+	profile_print_worst("worst_total", &profile_total);
+	if (profile_total.frames) platform_wii_log_sync();
 }
 #endif
 
