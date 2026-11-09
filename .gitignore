@@ -60,3 +60,6 @@ AGENTS.md
 AGENTS.MD
 .codex/
 .agents/
+
+/mk64/
+*.trc
