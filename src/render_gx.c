@@ -60,6 +60,9 @@ static bool depth_write, depth_test;
 static float depth_offset;
 static float frustum_planes[4][4];
 static float viewport_aspect_scale = 1.0f;
+#ifdef WII_SMOKE_2P
+static int smoke_view = -1;
+#endif
 
 #ifdef WII_DIAG
 #define DIAG_BATCHES 16
@@ -361,6 +364,9 @@ void render_set_viewport(int index, int count) {
 	GX_SetViewport(WII_OVERSCAN_X, WII_OVERSCAN_Y + top, width, bottom - top, 0, 1);
 	GX_SetScissor(WII_OVERSCAN_X, WII_OVERSCAN_Y + top, width, bottom - top);
 	viewport_aspect_scale = (float)height / (bottom - top);
+#ifdef WII_SMOKE_2P
+	smoke_view = count == 2 ? index : -1;
+#endif
 	set_projection();
 }
 void render_set_screen_size(vec2i_t size) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_size = size; set_projection(); }
@@ -461,7 +467,12 @@ void render_set_depth_write(bool enabled) { PROF_ADD(flush_state, !!tris_len); r
 void render_set_depth_test(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_test = enabled; set_depth(); }
 void render_set_depth_offset(float offset) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_offset = offset; set_projection(); }
 void render_set_cull_backface(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); GX_SetCullMode(enabled ? GX_CULL_BACKFACE : GX_CULL_NONE); }
-void render_set_screen_position(vec2_t pos) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_position = pos; set_projection(); }
+void render_set_screen_position(vec2_t pos) {
+#ifdef WII_SMOKE_2P
+	if (pos.x != 0 || pos.y != 0) printf("SMOKE2P render shake view=%d %.3f %.3f\n", smoke_view, pos.x, pos.y);
+#endif
+	PROF_ADD(flush_state, !!tris_len); render_flush(); screen_position = pos; set_projection();
+}
 void render_set_blend_mode(render_blend_mode_t mode) {
 	if (mode == blend_mode) return;
 	PROF_ADD(flush_state, !!tris_len);

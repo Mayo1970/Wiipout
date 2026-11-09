@@ -313,6 +313,24 @@ static void platform_smoke_update(void) {
 	// The release is always sent so RETURN is never left held when the race loads.
 	if (return_ready && !smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
 	if (smoke_frame % 30 == 1) input_set_button_state(INPUT_KEY_RETURN, 0.0f);
+#ifdef WII_SMOKE_2P
+	// The players page sets 1 on RETURN; forcing 2 until the race also adds the P2 pilot page.
+	if (!smoke_race_seen) g.players = 2;
+	if (smoke_race_seen) {
+		static float last_shake[2];
+		static uint32_t last_flags[2];
+		for (int i = 0; i < 2; i++) {
+			ship_t *p = &g.ships[g.pilots[i]];
+			if (p->update_func == ship_player_update_race) p->update_func = ship_ai_update_race;
+			if (g.cameras[i].shake_timer > last_shake[i] + 0.001f)
+				printf("SMOKE2P shake cam=%d frame %u timer=%.2f\n", i, (unsigned int)smoke_frame, g.cameras[i].shake_timer);
+			if (p->flags != last_flags[i])
+				printf("SMOKE2P flags p%d frame %u %08x -> %08x\n", i + 1, (unsigned int)smoke_frame, (unsigned int)last_flags[i], (unsigned int)p->flags);
+			last_shake[i] = g.cameras[i].shake_timer;
+			last_flags[i] = p->flags;
+		}
+	}
+#endif
 	if (smoke_race_seen) {
 		ship_t *ship = &g.ships[g.pilot];
 		// AI drives the player ship; flags stay untouched so the HUD still draws.
@@ -341,7 +359,11 @@ static void platform_smoke_update(void) {
 			return;
 		}
 #else
+#ifdef WII_SMOKE_2P
+		if (!smoke_lap_done && ship->max_lap >= 2) {
+#else
 		if (!smoke_lap_done && ship->max_lap >= 1) {
+#endif
 			smoke_lap_done = true;
 			smoke_lap_frame = smoke_frame;
 			printf("SMOKE lap 1 done frame %u\n", (unsigned int)smoke_frame);
