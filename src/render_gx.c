@@ -30,13 +30,13 @@ typedef struct {
 	GXTexObj obj;
 	void *data;
 	uint32_t width, height, padded_width, padded_height;
+	float inv_padded_width, inv_padded_height;
 	u8 format;
 } gx_texture_t;
 
 uint16_t RENDER_NO_TEXTURE;
 static gx_texture_t textures[TEXTURES_MAX];
 static uint16_t textures_len;
-static tris_t tris_buffer[TRIS_MAX];
 static uint32_t tris_len;
 static uint16_t batch_texture;
 static vec2i_t screen_size;
@@ -108,23 +108,6 @@ static bool vertex_valid(vec3_t p) {
 	return fabsf(p.x) < VERTEX_LIMIT && fabsf(p.y) < VERTEX_LIMIT && fabsf(p.z) < VERTEX_LIMIT;
 }
 
-// The real GPU can lock up on NaN, infinite or huge vertices (PC GPUs and Dolphin skip them), so drop those triangles.
-static void drop_invalid_tris(void) {
-	uint32_t kept = 0;
-	for (uint32_t i = 0; i < tris_len; i++) {
-		tris_t *t = &tris_buffer[i];
-		if (vertex_valid(t->vertices[0].pos) && vertex_valid(t->vertices[1].pos) && vertex_valid(t->vertices[2].pos)) {
-			if (kept != i) tris_buffer[kept] = *t;
-			kept++;
-		}
-	}
-#ifdef WII_DIAG
-	wii_diag_dropped_tris += tris_len - kept;
-#endif
-	PROF_ADD(dropped, tris_len - kept);
-	tris_len = kept;
-}
-
 static void reset_vertex_streams(void) {
 	vertex_base = 0;
 	GX_SetArray(GX_VA_POS, vertex_positions, sizeof(vec3_t));
@@ -142,36 +125,11 @@ static void flush_vertex_range(void *stream, uint32_t stride, uint32_t base, uin
 static void render_flush(void) {
 	PROF_WAIT_SNAPSHOT(submit_wait);
 	PROF_TIME_START(submit_start);
-	drop_invalid_tris();
 	if (!tris_len) { PROF_TIME_ADD(submit_ms, submit_start); return; }
 	gx_texture_t *texture = &textures[batch_texture];
 	uint32_t count = tris_len * 3;
-	// Keep batches on separate cache lines so GX cannot reuse stale vertex data.
-	vertex_base = (vertex_base + 7) & ~7u;
-	if (vertex_base + count > VERTEX_MAX) {
-		WII_DIAG_PHASE(WII_PHASE_FLUSH_WAIT);
-		PROF_TIME_START(wait_start);
-		GX_DrawDone();
-		PROF_TIME_ADD(wait_ms, wait_start);
-		PROF_ADD(arena_waits, 1);
-		WII_DIAG_PHASE(WII_PHASE_UPDATE);
-		reset_vertex_streams();
-	}
 	uint32_t base = vertex_base;
-	vertex_base += count;
-	PROF_PEAK(arena_peak, vertex_base * (sizeof(vec3_t) + sizeof(rgba_t) + sizeof(vec2_t)));
-	vec3_t *positions = vertex_positions + base;
-	rgba_t *colors = vertex_colors + base;
-	vec2_t *uvs = vertex_uvs + base;
-	for (uint32_t i = 0; i < tris_len; i++) {
-		for (uint32_t j = 0; j < 3; j++) {
-			vertex_t *v = &tris_buffer[i].vertices[j];
-			uint32_t index = i * 3 + j;
-			positions[index] = v->pos;
-			colors[index] = v->color;
-			uvs[index] = vec2(v->uv.x / texture->padded_width, v->uv.y / texture->padded_height);
-		}
-	}
+	PROF_PEAK(arena_peak, (base + count) * (sizeof(vec3_t) + sizeof(rgba_t) + sizeof(vec2_t)));
 	flush_vertex_range(vertex_positions, sizeof(vec3_t), base, count);
 	flush_vertex_range(vertex_colors, sizeof(rgba_t), base, count);
 	flush_vertex_range(vertex_uvs, sizeof(vec2_t), base, count);
@@ -182,7 +140,7 @@ static void render_flush(void) {
 	}
 	GX_End();
 #ifdef WII_DIAG
-	diag_batch_record(positions, uvs, count, texture);
+	diag_batch_record(vertex_positions + base, vertex_uvs + base, count, texture);
 #else
 	static u16 token;
 	// A draw sync token after every batch prevented a GPU hang on hardware (WPO-23).
@@ -195,6 +153,8 @@ static void render_flush(void) {
 	PROF_WAIT_SUBTRACT(submit_ms, submit_wait);
 	running_stats.num_tris += tris_len;
 	running_stats.num_draw_calls++;
+	// GX vertex cache is invalidated once per frame; keep batches on separate cache lines.
+	vertex_base = (base + count + 7) & ~7u;
 	tris_len = 0;
 }
 
@@ -430,20 +390,54 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 		PROF_ADD(flush_full, batch_texture == texture);
 		render_flush();
 	}
-	PROF_TICKS_START(push_start);
-	batch_texture = texture;
-	if (!view_2d && !fade_inside) for (int i = 0; i < 3; i++) {
-		vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
-		static const float near_sq = RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR;
-		float distance_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-		if (distance_sq <= near_sq) continue;
-		float distance = sqrtf(distance_sq);
-		float t = (RENDER_FADEOUT_FAR - distance) / (RENDER_FADEOUT_FAR - RENDER_FADEOUT_NEAR);
-		if (t < 0) t = 0; else if (t > 1) t = 1;
-		tris.vertices[i].color.a *= t * t * (3 - 2 * t);
+	{
+		PROF_TICKS_START(push_start);
+		if (!view_2d && !fade_inside) for (int i = 0; i < 3; i++) {
+			vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
+			static const float near_sq = RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR;
+			float distance_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+			if (distance_sq <= near_sq) continue;
+			float distance = sqrtf(distance_sq);
+			float t = (RENDER_FADEOUT_FAR - distance) / (RENDER_FADEOUT_FAR - RENDER_FADEOUT_NEAR);
+			if (t < 0) t = 0; else if (t > 1) t = 1;
+			tris.vertices[i].color.a *= t * t * (3 - 2 * t);
+		}
+		// The real GPU can lock up on NaN, infinite or huge vertices.
+		if (!vertex_valid(tris.vertices[0].pos) || !vertex_valid(tris.vertices[1].pos) || !vertex_valid(tris.vertices[2].pos)) {
+#ifdef WII_DIAG
+			wii_diag_dropped_tris++;
+#endif
+			PROF_ADD(dropped, 1);
+			PROF_TICKS_ADD(push_ticks, push_start);
+			return;
+		}
+		PROF_TICKS_ADD(push_ticks, push_start);
 	}
-	tris_buffer[tris_len++] = tris;
-	PROF_TICKS_ADD(push_ticks, push_start);
+	if (vertex_base + tris_len * 3 + 3 > VERTEX_MAX) {
+		PROF_ADD(flush_other, !!tris_len);
+		render_flush();
+		WII_DIAG_PHASE(WII_PHASE_FLUSH_WAIT);
+		PROF_TIME_START(wait_start);
+		GX_DrawDone();
+		PROF_TIME_ADD(wait_ms, wait_start);
+		PROF_ADD(arena_waits, 1);
+		WII_DIAG_PHASE(WII_PHASE_UPDATE);
+		reset_vertex_streams();
+	}
+	{
+		PROF_TICKS_START(push_start);
+		batch_texture = texture;
+		gx_texture_t *t = &textures[texture];
+		uint32_t base = vertex_base + tris_len * 3;
+		for (uint32_t i = 0; i < 3; i++) {
+			vertex_t *v = &tris.vertices[i];
+			vertex_positions[base + i] = v->pos;
+			vertex_colors[base + i] = v->color;
+			vertex_uvs[base + i] = vec2(v->uv.x * t->inv_padded_width, v->uv.y * t->inv_padded_height);
+		}
+		tris_len++;
+		PROF_TICKS_ADD(push_ticks, push_start);
+	}
 }
 void render_push_2d_tile(vec2i_t pos, vec2i_t uv, vec2i_t uv_size, vec2i_t size, rgba_t color, uint16_t texture) {
 	float x = pos.x, y = pos.y, w = size.x, h = size.y;
@@ -473,6 +467,7 @@ uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) 
 	gx_texture_t *t = &textures[index];
 	t->width = width; t->height = height;
 	t->padded_width = width ? (width + 3) & ~3u : 4; t->padded_height = height ? (height + 3) & ~3u : 4;
+	t->inv_padded_width = 1.0f / t->padded_width; t->inv_padded_height = 1.0f / t->padded_height;
 	t->data = memalign(32, t->padded_width * t->padded_height * 2);
 	error_if(!t->data, "GX texture allocation failed");
 	encode_texture(t, pixels);
@@ -491,6 +486,8 @@ void render_texture_replace_pixels(int16_t index, rgba_t *pixels) {
 	GX_DrawDone();
 	PROF_TIME_ADD(wait_ms, texture_wait_start);
 	WII_DIAG_PHASE(WII_PHASE_UPDATE);
+	textures[index].inv_padded_width = 1.0f / textures[index].padded_width;
+	textures[index].inv_padded_height = 1.0f / textures[index].padded_height;
 	encode_texture(&textures[index], pixels);
 }
 uint16_t render_textures_len(void) { return textures_len; }
