@@ -48,6 +48,15 @@ const render_stats_t* render_frame_get_stats(void);
 void render_set_view(vec3_t pos, vec3_t angles);
 void render_set_view_2d(void);
 void render_set_model_mat(mat4_t *m);
+#ifdef RENDERER_GX
+void render_gx_fade_hint(vec3_t world_center, float radius);
+void render_gx_object_fade_hint(mat4_t *mat, float radius);
+void render_gx_fade_inside(bool inside);
+#else
+#define render_gx_fade_hint(center, radius) ((void)0)
+#define render_gx_object_fade_hint(mat, radius) ((void)0)
+#define render_gx_fade_inside(inside) ((void)0)
+#endif
 void render_set_depth_write(bool enabled);
 void render_set_depth_test(bool enabled);
 void render_set_depth_offset(float offset);

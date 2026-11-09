@@ -98,13 +98,33 @@ void race_update(void) {
 		PROF_WAIT_SUBTRACT(sim_weapons_ms, sim_weapons_wait);
 		PROF_WAIT_SNAPSHOT(sim_other_wait);
 		PROF_TIME_START(sim_other_start);
+		PROF_WAIT_SNAPSHOT(sim_rumble_wait);
+		PROF_TIME_START(sim_rumble_start);
 		rumble_update();
+		PROF_TIME_ADD(sim_rumble_ms, sim_rumble_start);
+		PROF_WAIT_SUBTRACT(sim_rumble_ms, sim_rumble_wait);
+		PROF_WAIT_SNAPSHOT(sim_particles_wait);
+		PROF_TIME_START(sim_particles_start);
 		particles_update();
+		PROF_TIME_ADD(sim_particles_ms, sim_particles_start);
+		PROF_WAIT_SUBTRACT(sim_particles_ms, sim_particles_wait);
+		PROF_WAIT_SNAPSHOT(sim_scene_wait);
+		PROF_TIME_START(sim_scene_start);
 		scene_update();
+		PROF_TIME_ADD(sim_scene_ms, sim_scene_start);
+		PROF_WAIT_SUBTRACT(sim_scene_ms, sim_scene_wait);
+		PROF_WAIT_SNAPSHOT(sim_map_wait);
+		PROF_TIME_START(sim_map_start);
 		map_update();
+		PROF_TIME_ADD(sim_map_ms, sim_map_start);
+		PROF_WAIT_SUBTRACT(sim_map_ms, sim_map_wait);
+		PROF_WAIT_SNAPSHOT(sim_pickups_wait);
+		PROF_TIME_START(sim_pickups_start);
 		if (g.race_type != RACE_TYPE_TIME_TRIAL) {
 			track_cycle_pickups();
 		}
+		PROF_TIME_ADD(sim_pickups_ms, sim_pickups_start);
+		PROF_WAIT_SUBTRACT(sim_pickups_ms, sim_pickups_wait);
 		PROF_TIME_ADD(sim_other_ms, sim_other_start);
 		PROF_WAIT_SUBTRACT(sim_other_ms, sim_other_wait);
 

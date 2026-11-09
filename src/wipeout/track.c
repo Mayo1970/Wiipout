@@ -11,7 +11,7 @@
 
 static track_face_t **visible_faces, **sorted_faces;
 static uint32_t *texture_offsets;
-static bool *texture_transparent;
+static bool *texture_transparent, *visible_ordered;
 
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
@@ -60,6 +60,7 @@ void track_load(const char *base_path) {
 	track_load_sections(get_path(base_path, "track.trs"));
 	visible_faces = mem_bump(sizeof(*visible_faces) * g.track.face_count);
 	sorted_faces = mem_bump(sizeof(*sorted_faces) * g.track.face_count);
+	visible_ordered = mem_bump(sizeof(*visible_ordered) * g.track.face_count);
 	texture_offsets = mem_bump(sizeof(*texture_offsets) * g.track.textures.len);
 
 	g.track.pickups_len = 0;
@@ -312,12 +313,12 @@ void track_draw_section(section_t *section) {
 	}
 }
 
-static bool track_face_ordered(track_face_t *face, vec3_t cam_pos) {
+static bool track_face_ordered(track_face_t *face, vec3_t cam_pos, bool section_near) {
 	if (texture_transparent[face->texture]) return true;
 	for (int i = 0; i < 2; i++) {
 		for (int j = 0; j < 3; j++) {
 			vertex_t *v = &face->tris[i].vertices[j];
-			if (v->color.a < 255 || vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR) return true;
+			if (v->color.a < 255 || (!section_near && vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR)) return true;
 		}
 	}
 	return false;
@@ -344,12 +345,16 @@ void track_draw(camera_t *camera) {
 			cam_dot < RENDER_FADEOUT_FAR + s->radius
 		) {
 			PROF_ADD(track_drawn, 1);
+			float near_limit = RENDER_FADEOUT_NEAR - s->radius - 4.0f;
+			bool section_near = near_limit > 0 && vec3_len_sq(diff) < near_limit * near_limit;
 			for (int j = 0; j < s->face_count; j++) {
 				track_face_t *face = &g.track.faces[s->face_start + j];
 				texture_from_list(g.track.textures, face->texture);
 				error_if(visible_count >= g.track.face_count, "Too many visible track faces");
-				visible_faces[visible_count++] = face;
-				if (!track_face_ordered(face, cam_pos)) texture_offsets[face->texture]++;
+				visible_faces[visible_count] = face;
+				visible_ordered[visible_count] = track_face_ordered(face, cam_pos, section_near);
+				if (!visible_ordered[visible_count]) texture_offsets[face->texture]++;
+				visible_count++;
 				PROF_ADD(faces, 1);
 			}
 		}
@@ -363,17 +368,20 @@ void track_draw(camera_t *camera) {
 	}
 	for (uint32_t i = 0; i < visible_count; i++) {
 		track_face_t *face = visible_faces[i];
-		if (!track_face_ordered(face, cam_pos)) sorted_faces[texture_offsets[face->texture]++] = face;
+		if (!visible_ordered[i]) sorted_faces[texture_offsets[face->texture]++] = face;
 	}
+	// Sorted faces were all proven to have every vertex inside the near distance.
+	render_gx_fade_inside(true);
 	for (uint32_t i = 0; i < sorted_count; i++) {
 		track_face_t *face = sorted_faces[i];
 		uint16_t texture = texture_from_list(g.track.textures, face->texture);
 		render_push_tris(face->tris[0], texture);
 		render_push_tris(face->tris[1], texture);
 	}
+	render_gx_fade_inside(false);
 	for (uint32_t i = 0; i < visible_count; i++) {
 		track_face_t *face = visible_faces[i];
-		if (track_face_ordered(face, cam_pos)) {
+		if (visible_ordered[i]) {
 			uint16_t texture = texture_from_list(g.track.textures, face->texture);
 			render_push_tris(face->tris[0], texture);
 			render_push_tris(face->tris[1], texture);

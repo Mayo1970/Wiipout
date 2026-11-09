@@ -816,6 +816,7 @@ typedef struct {
 	wii_profile_frame_t sum;
 	uint64_t frames;
 	double frame_ms, frame_max, update_max, submit_max, wait_max;
+	double sim_rumble_max, sim_particles_max, sim_scene_max, sim_map_max, sim_pickups_max;
 	double sim_ships_max, sim_droid_max, sim_camera_max, sim_weapons_max, sim_other_max, draw_scene_max, draw_track_max, draw_ships_max, draw_fx_max, draw_2d_max, push_max;
 } profile_stats_t;
 static profile_stats_t profile_window, profile_total;
@@ -839,6 +840,16 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 	if (s->sim_camera_max < wii_profile_frame.sim_camera_ms) s->sim_camera_max = wii_profile_frame.sim_camera_ms;
 	s->sum.sim_weapons_ms += wii_profile_frame.sim_weapons_ms;
 	if (s->sim_weapons_max < wii_profile_frame.sim_weapons_ms) s->sim_weapons_max = wii_profile_frame.sim_weapons_ms;
+	s->sum.sim_rumble_ms += wii_profile_frame.sim_rumble_ms;
+	if (s->sim_rumble_max < wii_profile_frame.sim_rumble_ms) s->sim_rumble_max = wii_profile_frame.sim_rumble_ms;
+	s->sum.sim_particles_ms += wii_profile_frame.sim_particles_ms;
+	if (s->sim_particles_max < wii_profile_frame.sim_particles_ms) s->sim_particles_max = wii_profile_frame.sim_particles_ms;
+	s->sum.sim_scene_ms += wii_profile_frame.sim_scene_ms;
+	if (s->sim_scene_max < wii_profile_frame.sim_scene_ms) s->sim_scene_max = wii_profile_frame.sim_scene_ms;
+	s->sum.sim_map_ms += wii_profile_frame.sim_map_ms;
+	if (s->sim_map_max < wii_profile_frame.sim_map_ms) s->sim_map_max = wii_profile_frame.sim_map_ms;
+	s->sum.sim_pickups_ms += wii_profile_frame.sim_pickups_ms;
+	if (s->sim_pickups_max < wii_profile_frame.sim_pickups_ms) s->sim_pickups_max = wii_profile_frame.sim_pickups_ms;
 	s->sum.sim_other_ms += wii_profile_frame.sim_other_ms;
 	if (s->sim_other_max < wii_profile_frame.sim_other_ms) s->sim_other_max = wii_profile_frame.sim_other_ms;
 	s->sum.draw_scene_ms += wii_profile_frame.draw_scene_ms;
@@ -885,6 +896,11 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" sim_droid_avg_ms=%.3f sim_droid_max_ms=%.3f"
 		" sim_camera_avg_ms=%.3f sim_camera_max_ms=%.3f"
 		" sim_weapons_avg_ms=%.3f sim_weapons_max_ms=%.3f"
+		" sim_rumble_avg_ms=%.3f sim_rumble_max_ms=%.3f"
+		" sim_particles_avg_ms=%.3f sim_particles_max_ms=%.3f"
+		" sim_scene_avg_ms=%.3f sim_scene_max_ms=%.3f"
+		" sim_map_avg_ms=%.3f sim_map_max_ms=%.3f"
+		" sim_pickups_avg_ms=%.3f sim_pickups_max_ms=%.3f"
 		" sim_other_avg_ms=%.3f sim_other_max_ms=%.3f"
 		" draw_scene_avg_ms=%.3f draw_scene_max_ms=%.3f"
 		" draw_track_avg_ms=%.3f draw_track_max_ms=%.3f"
@@ -921,6 +937,11 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		s->sum.sim_droid_ms / s->frames, s->sim_droid_max,
 		s->sum.sim_camera_ms / s->frames, s->sim_camera_max,
 		s->sum.sim_weapons_ms / s->frames, s->sim_weapons_max,
+		s->sum.sim_rumble_ms / s->frames, s->sim_rumble_max,
+		s->sum.sim_particles_ms / s->frames, s->sim_particles_max,
+		s->sum.sim_scene_ms / s->frames, s->sim_scene_max,
+		s->sum.sim_map_ms / s->frames, s->sim_map_max,
+		s->sum.sim_pickups_ms / s->frames, s->sim_pickups_max,
 		s->sum.sim_other_ms / s->frames, s->sim_other_max,
 		s->sum.draw_scene_ms / s->frames, s->draw_scene_max,
 		s->sum.draw_track_ms / s->frames, s->draw_track_max,

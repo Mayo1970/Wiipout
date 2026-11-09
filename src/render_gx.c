@@ -351,7 +351,25 @@ void render_frame_end(void) {
 	end_stats = running_stats;
 }
 const render_stats_t *render_frame_get_stats(void) { return &end_stats; }
+static bool fade_inside;
+
+void render_gx_fade_hint(vec3_t world_center, float radius) {
+	float limit = RENDER_FADEOUT_NEAR - radius - 4.0f;
+	vec3_t delta = vec3_sub(world_center, camera_pos);
+	fade_inside = limit > 0 && vec3_len_sq(delta) < limit * limit;
+}
+void render_gx_object_fade_hint(mat4_t *mat, float radius) {
+	// The Frobenius norm bounds expansion even for scaled or sheared models.
+	float scale_sq = 0;
+	for (int col = 0; col < 3; col++) {
+		for (int row = 0; row < 3; row++) scale_sq += mat->m[col * 4 + row] * mat->m[col * 4 + row];
+	}
+	render_gx_fade_hint(vec3_transform(vec3(0, 0, 0), mat), radius * sqrtf(scale_sq));
+}
+void render_gx_fade_inside(bool inside) { fade_inside = inside; }
+
 void render_set_view(vec3_t pos, vec3_t angles) {
+	fade_inside = false;
 	PROF_ADD(flush_state, !!tris_len);
 	render_flush();
 	view_2d = false;
@@ -365,6 +383,7 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	set_depth(); set_model_view(); set_projection();
 }
 void render_set_view_2d(void) {
+	fade_inside = false;
 	PROF_ADD(flush_state, !!tris_len);
 	render_flush();
 	view_2d = true;
@@ -372,7 +391,7 @@ void render_set_view_2d(void) {
 	depth_test = depth_write = false;
 	set_depth(); set_model_view(); set_projection();
 }
-void render_set_model_mat(mat4_t *m) { PROF_ADD(flush_model, !!tris_len); render_flush(); model_mat = *m; set_model_view(); }
+void render_set_model_mat(mat4_t *m) { PROF_ADD(flush_model, !!tris_len); render_flush(); model_mat = *m; fade_inside = false; set_model_view(); }
 void render_set_depth_write(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_write = enabled; set_depth(); }
 void render_set_depth_test(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_test = enabled; set_depth(); }
 void render_set_depth_offset(float offset) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_offset = offset; set_projection(); }
@@ -396,7 +415,7 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 	}
 	PROF_TICKS_START(push_start);
 	batch_texture = texture;
-	if (!view_2d) for (int i = 0; i < 3; i++) {
+	if (!view_2d && !fade_inside) for (int i = 0; i < 3; i++) {
 		vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
 		static const float near_sq = RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR;
 		float distance_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
@@ -420,6 +439,8 @@ void render_push_2d(vec2i_t pos, vec2i_t size, rgba_t color, uint16_t texture) {
 }
 void render_push_sprite(vec3_t pos, vec2i_t size, rgba_t color, uint16_t texture) {
 	if (view_2d) { render_push_2d(vec2i(pos.x - size.x * 0.5f, pos.y - size.y * 0.5f), size, color, texture); return; }
+	bool saved_fade_inside = fade_inside;
+	fade_inside = false;
 	vec3_t p1 = vec3_add(pos, vec3_transform(vec3(-size.x * 0.5f, -size.y * 0.5f, 0), &sprite_mat));
 	vec3_t p2 = vec3_add(pos, vec3_transform(vec3( size.x * 0.5f, -size.y * 0.5f, 0), &sprite_mat));
 	vec3_t p3 = vec3_add(pos, vec3_transform(vec3(-size.x * 0.5f,  size.y * 0.5f, 0), &sprite_mat));
@@ -427,6 +448,7 @@ void render_push_sprite(vec3_t pos, vec2i_t size, rgba_t color, uint16_t texture
 	vec2i_t uv = render_texture_size(texture);
 	render_push_tris((tris_t){.vertices = {{p1,{0,0},color}, {p2,{uv.x,0},color}, {p3,{0,uv.y},color}}}, texture);
 	render_push_tris((tris_t){.vertices = {{p3,{0,uv.y},color}, {p2,{uv.x,0},color}, {p4,{uv.x,uv.y},color}}}, texture);
+	fade_inside = saved_fade_inside;
 }
 uint16_t render_texture_create(uint32_t width, uint32_t height, rgba_t *pixels) {
 	error_if(textures_len >= TEXTURES_MAX || width > 1024 || height > 1024 || (width && height && !pixels), "Invalid GX texture %ux%u", (unsigned)width, (unsigned)height);

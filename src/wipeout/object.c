@@ -209,6 +209,15 @@ Object *objects_load(char *name, texture_list_t tl) {
 		} // each prim
 	} // each object
 
+#ifdef RENDERER_GX
+	for (Object *obj = objectList; obj; obj = obj->next) {
+		float radius_sq = obj->radius * obj->radius;
+		for (int i = 0; i < obj->vertices_len; i++) {
+			radius_sq = max(radius_sq, vec3_len_sq(obj->vertices[i]));
+		}
+		obj->radius = sqrtf(radius_sq);
+	}
+#endif
 	mem_temp_free(bytes);
 	return objectList;
 }
@@ -217,6 +226,7 @@ Object *objects_load(char *name, texture_list_t tl) {
 void object_draw(Object *object, mat4_t *mat) {
 	vec3_t *vertex = object->vertices;
 	render_set_model_mat(mat);
+	render_gx_object_fade_hint(mat, object->radius);
 
 	for (int i = 0; i < object->primitives_len; i++) {
 		primitive_t *prm = &object->primitives[i];
@@ -266,4 +276,5 @@ void object_draw(Object *object, mat4_t *mat) {
 			die("Can't happen: Unknown primitive type %x", prm->type);
 		}
 	}
+	render_gx_fade_inside(false);
 }
