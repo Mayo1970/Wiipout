@@ -13,9 +13,10 @@ from pathlib import Path
 SCALE = 16.0
 ROAD_WIDTH = 3500.0
 SPACING = 1744.0
+OVERLAP_OFFSET = 8.0
 VERTEX = re.compile(r'\{\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*,\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*,\s*\{\s*MACRO_COLOR_FLAG\(([^)]*)\)\s*,\s*([^}]+)\}')
 ARRAY = re.compile(r'\bGfx\s+(\w+)\s*\[\s*\]\s*=\s*\{(.*?)\};', re.S)
-COMMAND = re.compile(r'\b(gsSPVertex|gsSP1Triangle|gsSP2Triangles|gsSPDisplayList|gsDPSetTextureImage|gsDPSetTile|gsDPSetTileSize|gsSPTexture)\s*\(([^()]*)\)')
+COMMAND = re.compile(r'\b(gsSPVertex|gsSP1Triangle|gsSP2Triangles|gsSPDisplayList|gsDPSetTextureImage|gsDPSetTile|gsDPSetTileSize|gsSPTexture|gsDPSetCombineMode)\s*\(([^()]*)\)')
 POINT = re.compile(r'\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}')
 
 
@@ -30,7 +31,7 @@ def read_source(root, course):
     for m in VERTEX.finditer(source):
         x, y, z = map(int, m.group(1, 2, 3))
         r, g, b, flag = map(number, m.group(6).split(','))
-        vertices.append(((x, y, z), ((r & ~3) | (flag & 3), (g & ~3) | ((flag >> 2) & 3), b), tuple(map(int, m.group(4, 5)))))
+        vertices.append(((x, y, z), (r & ~3, g & ~3, b), tuple(map(int, m.group(4, 5)))))
     if not vertices:
         raise ValueError('no CourseVtx entries found')
     data = (folder / 'course_data.c').read_text()
@@ -50,6 +51,8 @@ def read_source(root, course):
                 walk(args[0], state, cache, stack)
             elif op == 'gsDPSetTextureImage':
                 state['image'] = args[3]
+            elif op == 'gsDPSetCombineMode':
+                state['combine'] = args[0]
             elif op == 'gsSPTexture':
                 state['scale'] = (number(args[0])/65536, number(args[1])/65536)
                 state['enabled'] = args[4] != 'G_OFF'
@@ -113,8 +116,104 @@ def read_source(root, course):
         if len(points) < 3:
             raise ValueError(f'track path has fewer than three points: {name}')
         paths.append(points)
-    return vertices, triangles, paths
+    match = re.search(r'struct ActorSpawnData\s+d_course_' + re.escape(course) + r'_item_box_spawns\s*\[\s*\]\s*=\s*\{(.*?)\};', data, re.S)
+    if not match:
+        raise ValueError('item box spawns not found')
+    boxes = []
+    for m in re.finditer(r'\{\s*\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}\s*,\s*\{\s*(-?\d+)\s*\}\s*\}', match.group(1)):
+        x, y, z, group = map(int, m.groups())
+        if x == -32768:
+            break
+        boxes.append((x, y, z, group))
+    else:
+        raise ValueError('item boxes have no terminator')
+    return vertices, triangles, paths, boxes
 
+
+def dedupe(vertices, triangles):
+    groups = defaultdict(lambda: defaultdict(list))
+    for tri, state in triangles:
+        positions = tuple(vertices[i][0] for i in tri)
+        rotations = [positions[i:] + positions[:i] for i in range(3)]
+        shift = rotations.index(min(rotations))
+        tri = tri[shift:] + tri[:shift]
+        variant = (tuple((vertices[i][1], vertices[i][2]) for i in tri),
+                   tuple(sorted((k, str(v)) for k, v in state.items() if k != 'array')))
+        groups[min(rotations)][variant].append((tri, state))
+    result = []
+    for variants in groups.values():
+        def rank(items):
+            tri = items[0][0]
+            shade = sum(sum(c*w for c, w in zip(vertices[i][1], (2126, 7152, 722))) for i in tri)
+            return (-len({state['array'] for _, state in items}), shade)
+        items = min(variants.values(), key=rank)
+        tri, state = items[0]
+        result.append((tri, dict(state, source_arrays=frozenset(s['array'] for _, s in items))))
+    return result, len(triangles)-len(result)
+
+
+
+def overlap_offsets(vertices, triangles):
+    planes = defaultdict(list)
+    for index, (tri, state) in enumerate(triangles):
+        p = [vertices[i][0] for i in tri]
+        a = [p[1][i]-p[0][i] for i in range(3)]
+        b = [p[2][i]-p[0][i] for i in range(3)]
+        n = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+        div = math.gcd(*n)
+        if not div: continue
+        n = tuple(x//div for x in n)
+        if next(x for x in n if x) < 0: n = tuple(-x for x in n)
+        d = sum(n[i]*p[0][i] for i in range(3))
+        drop = max(range(3), key=lambda i: abs(n[i]))
+        axes = [i for i in range(3) if i != drop]
+        q = [tuple(x[i] for i in axes) for x in p]
+        variant = (state.get('image'), tuple(sorted(vertices[i][1] for i in tri)))
+        planes[n, d].append((index, q, variant))
+    parent = list(range(len(triangles)))
+    edges = []
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for plane in planes.values():
+        for i, (ia, a, va) in enumerate(plane):
+            for ib, b, vb in plane[i+1:]:
+                if va == vb: continue
+                overlap = True
+                for poly in (a, b):
+                    for j in range(3):
+                        u, v = poly[j], poly[(j+1)%3]
+                        axis = (u[1]-v[1], v[0]-u[0])
+                        pa = [x*axis[0]+y*axis[1] for x,y in a]
+                        pb = [x*axis[0]+y*axis[1] for x,y in b]
+                        if min(max(pa), max(pb)) <= max(min(pa), min(pb)):
+                            overlap = False
+                            break
+                    if not overlap: break
+                if overlap:
+                    edges.append((ia, ib))
+                    parent[root(ia)] = root(ib)
+    groups = defaultdict(set)
+    for a, b in edges:
+        groups[root(a)].update((a, b))
+    offsets = {}
+    for group in groups.values():
+        variants = defaultdict(list)
+        for i in group:
+            tri, state = triangles[i]
+            key = (state.get('image'), tuple(sorted(vertices[j][1] for j in tri)))
+            variants[key].append(i)
+        def rank(item):
+            key, indices = item
+            shade = sum(sum(c*w for c, w in zip(color, (2126, 7152, 722))) for color in key[1])
+            arrays = set().union(*(triangles[i][1]['source_arrays'] for i in indices))
+            return (shade, -len(arrays), repr(key))
+        for level, (_, indices) in enumerate(sorted(variants.items(), key=rank)):
+            if level:
+                offsets.update((i, level * OVERLAP_OFFSET) for i in indices)
+    return offsets, len(groups), edges
 
 
 def samples(points, scale):
@@ -253,7 +352,7 @@ def open_samples(points, scale):
     return result
 
 
-def road(points, scale, branch_points=()):
+def road(points, scale, branch_points=(), boxes=()):
     centers = [(x * scale, -y * scale, -z * scale) for x, y, z in points]
     main_count = len(centers)
     links = [[-1, (i-1) % main_count, (i+1) % main_count, 0] for i in range(main_count)]
@@ -279,6 +378,13 @@ def road(points, scale, branch_points=()):
         for offset, elevation in [(-ROAD_WIDTH/2, -500), (-ROAD_WIDTH/2, 0), (0, 0), (ROAD_WIDTH/2, 0), (ROAD_WIDTH/2, -500)]:
             row.append(tuple(round(v) for v in (p[0]+side[0]*offset, p[1]+elevation, p[2]+side[1]*offset)))
         rows.append(row)
+    pickup_faces = set()
+    for x, y, z, group in boxes:
+        p = (x*scale, -y*scale, -z*scale)
+        i = min(range(len(centers)), key=lambda k: distance_to_segment(p, centers[k], centers[links[k][2]]))
+        a, b = centers[i], centers[links[i][2]]
+        cross = (b[2]-a[2])*(p[0]-a[0]) - (b[0]-a[0])*(p[2]-a[2])
+        pickup_faces.add((i, 2 if cross >= 0 else 1))
     trv = b''.join(struct.pack('>iiii', *v, 0) for row in rows for v in row)
     trf = bytearray()
     trs = bytearray()
@@ -288,14 +394,16 @@ def road(points, scale, branch_points=()):
         for j in range(4):
             ids = (next_index*5+j+1, next_index*5+j, i*5+j, i*5+j+1)
             n = normal(nxt[j+1], nxt[j], row[j])
-            trf.extend(struct.pack('>hhhhhhhBBI', *ids, *n, 0, 1 if j in (1, 2) else 0, 0xffffffff))
+            pickup = (i, j) in pickup_faces
+            flags = (1 if j in (1, 2) else 0) | ((8 if j == 2 else 2) if pickup else 0)
+            trf.extend(struct.pack('>hhhhhhhBBI', *ids, *n, 1 if pickup else 0, flags, 0xffffffff))
         section = bytearray(156)
         struct.pack_into('>iiiiii', section, 0, *links[i][:3], *map(round, centers[i]))
         struct.pack_into('>h', section, 24, 8)
         struct.pack_into('>hh', section, 142, i*4, 4)
         struct.pack_into('>h', section, 150, links[i][3])
         trs.extend(section)
-    return trv, bytes(trf), bytes(trs)
+    return trv, bytes(trf), bytes(trs), pickup_faces
 
 
 def png(path):
@@ -434,22 +542,22 @@ def object_bytes(name, positions, triangles):
     return bytes(data)
 
 
-def scenery(vertices, triangles, scale, mapping, no_textures):
+def scenery(vertices, triangles, scale, mapping, no_textures, offsets):
     tims, paths, dims, missing = [], {}, {}, set()
     groups = defaultdict(list)
     capped = 0
     untextured = defaultdict(int)
     untextured_arrays = defaultdict(int)
-    for tri, state in triangles:
+    for index, (tri, state) in enumerate(triangles):
         symbol = state.get('image')
         path = mapping.get(symbol)
         if symbol and (not path or not path.exists()): missing.add(symbol)
         tex = None
         reason = ('textures disabled by option' if no_textures else
                   'no SetTextureImage seen' if not symbol else
-                  'texture disabled' if not state.get('enabled', True) else
+                  'texture disabled' if not state.get('enabled', True) or state.get('combine') == 'G_CC_SHADE' else
                   'symbol unmapped' if not path or not path.exists() else None)
-        if not no_textures and path and path.exists() and state.get('enabled', True):
+        if not no_textures and path and path.exists() and state.get('enabled', True) and state.get('combine') != 'G_CC_SHADE':
             modes = state.get('modes', ('G_TX_WRAP', 'G_TX_WRAP'))
             mirror = tuple('G_TX_MIRROR' in mode and 'G_TX_CLAMP' not in mode for mode in modes)
             key = (path, *mirror)
@@ -462,6 +570,12 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
                 tims.append(tim_image(nw, nh, pixels))
             tex = paths[key]
         coords = [tuple(v*scale*s for v, s in zip(vertices[i][0], (1,-1,-1))) for i in tri]
+        if index in offsets:
+            a = [coords[1][i]-coords[0][i] for i in range(3)]
+            b = [coords[2][i]-coords[0][i] for i in range(3)]
+            normal = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+            length = math.sqrt(sum(x*x for x in normal))
+            coords = [tuple(p[i]-offsets[index]*normal[i]/length for i in range(3)) for p in coords]
         colors = [vertices[i][1] for i in tri]
         pieces = []
         if tex is not None:
@@ -521,8 +635,8 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
             ac = [pos[2][k]-pos[0][k] for k in range(3)]
             if all(ab[(k+1)%3]*ac[(k+2)%3] == ab[(k+2)%3]*ac[(k+1)%3] for k in range(3)): continue
             # The renderer doubles texture modulation; untextured faces use a half-white texture.
-            divisor = 2 if tex is not None else 1
-            cols = [tuple(max(0,min(255,round(x/divisor))) for x in p[3:6]) for p in pp]
+            factors = (0.5, 0.5, 0.5) if tex is not None else (255/264, 255/260, 255/264)
+            cols = [tuple(max(0,min(255,round(x*f))) for x, f in zip(p[3:6], factors)) for p in pp]
             center = tuple(sum(p[k] for p in pos)//3//12000 for k in range(3))
             groups[center].append((pos,cols,tex,uv))
             if tex is None:
@@ -555,7 +669,9 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r'[a-z0-9_]+', args.course) or not math.isfinite(args.scale) or args.scale <= 0:
         parser.error('course must be a lowercase identifier and scale must be positive and finite')
-    vertices, triangles, paths = read_source(args.mk64, args.course)
+    vertices, triangles, paths, boxes = read_source(args.mk64, args.course)
+    triangles, duplicates = dedupe(vertices, triangles)
+    offsets, overlap_groups, _ = overlap_offsets(vertices, triangles)
     points, misses = heights(samples(paths[0], args.scale), vertices, triangles)
     branch_points = []
     for start, end, stretch in branches(paths, points, args.scale):
@@ -563,15 +679,19 @@ def main():
         misses += fallback
         branch_points.append((start, end, branch))
         print(f'  branch {start}->{end}: {len(branch)} sections')
-    trv, trf, trs = road(points, args.scale, branch_points)
-    scene, objects, tims, after, capped, missing, untextured, untextured_arrays = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures)
+    trv, trf, trs, pickups = road(points, args.scale, branch_points, boxes)
+    scene, objects, tims, after, capped, missing, untextured, untextured_arrays = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures, offsets)
     skyverts = [(-12000, 0, -12000), (12000, 0, -12000), (12000, 0, 12000), (-12000, 0, 12000), (0, -12000, 0)]
     skytris = [((i, (i+1)%4, 4), [(110, 160, 220), (110, 160, 220), (30, 60, 150)]) for i in range(4)]
-    files = {'track.trv': trv, 'track.trf': trf, 'track.trs': trs, 'track.trc': bytes([1])*(len(trf)//20), 'library.ttf': bytes(42), 'library.cmp': cmp_file(), 'scene.prm': scene, 'scene.cmp': cmp_file(tims if tims else None), 'sky.prm': object_bytes('sky', skyverts, skytris), 'sky.cmp': cmp_file()}
+    pad = [(245, 245, 245, 255) if x % 8 < 2 or y % 8 < 2 or (abs(x-16) <= (y-8)//2 and 8 <= y < 24) else (55, 55, 55, 255) for y in range(32) for x in range(32)]
+    collision = bytes(0 if (i//4, i%4) in pickups else 1 for i in range(len(trf)//20))
+    files = {'track.trv': trv, 'track.trf': trf, 'track.trs': trs, 'track.trc': collision, 'library.ttf': bytes(42) + struct.pack('>21h', *([1]*21)), 'library.cmp': cmp_file([tim_image(32, 32, [(255,255,255,255)]*1024), tim_image(32, 32, pad)]), 'scene.prm': scene, 'scene.cmp': cmp_file(tims if tims else None), 'sky.prm': object_bytes('sky', skyverts, skytris), 'sky.cmp': cmp_file()}
     out = args.out / 'mk64' / args.course
     out.mkdir(parents=True, exist_ok=True)
     for name, data in files.items():
         (out / name).write_bytes(data)
+    print(f'  pickups: {len(boxes)} boxes -> {len(pickups)} faces; duplicates removed: {duplicates}')
+    print(f'  overlaps: {overlap_groups} groups, {len(offsets)} triangles nudged')
     print(f'{args.course}: {len(trs)//156} sections, {len(trf)//20} faces, {len(triangles)} scene triangles, {objects} scene objects, {misses} height fallbacks')
     print(f'  clipping: {len(triangles)} -> {after} triangles, {capped} capped, {len(tims)} textures')
     print(f'  untextured: {sum(untextured.values())} (' + ', '.join(f'{reason}: {untextured[reason]}' for reason in ('no SetTextureImage seen', 'texture disabled', 'symbol unmapped', 'capped', 'textures disabled by option') if untextured[reason]) + ')')
