@@ -397,7 +397,10 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 	batch_texture = texture;
 	if (!view_2d) for (int i = 0; i < 3; i++) {
 		vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
-		float distance = sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+		static const float near_sq = RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR;
+		float distance_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+		if (distance_sq <= near_sq) continue;
+		float distance = sqrtf(distance_sq);
 		float t = (RENDER_FADEOUT_FAR - distance) / (RENDER_FADEOUT_FAR - RENDER_FADEOUT_NEAR);
 		if (t < 0) t = 0; else if (t > 1) t = 1;
 		tris.vertices[i].color.a *= t * t * (3 - 2 * t);
