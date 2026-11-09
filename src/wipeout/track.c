@@ -399,10 +399,11 @@ void track_cycle_pickups(void) {
 		}
 		else if (g.track.pickups[i].cooldown_timer <= 0) {
 			flags_add(g.track.pickups[i].face->flags, FACE_PICKUP_ACTIVE);
+			float angle = fmodf(pickup_cycle_time + i, M_PI * 2);
 			track_face_set_color(g.track.pickups[i].face, rgba(
-				sinf( pickup_cycle_time + i) * 127 + 128,
-				cosf( pickup_cycle_time + i) * 127 + 128,
-				sinf(-pickup_cycle_time - i) * 127 + 128,
+				sinf(angle) * 127 + 128,
+				cosf(angle) * 127 + 128,
+				sinf(-angle) * 127 + 128,
 				255
 			));
 		}
