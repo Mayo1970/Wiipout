@@ -209,15 +209,6 @@ Object *objects_load(char *name, texture_list_t tl) {
 		} // each prim
 	} // each object
 
-#ifdef RENDERER_GX
-	for (Object *obj = objectList; obj; obj = obj->next) {
-		float radius_sq = obj->radius * obj->radius;
-		for (int i = 0; i < obj->vertices_len; i++) {
-			radius_sq = max(radius_sq, vec3_len_sq(obj->vertices[i]));
-		}
-		obj->radius = sqrtf(radius_sq);
-	}
-#endif
 	mem_temp_free(bytes);
 	return objectList;
 }

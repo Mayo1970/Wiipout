@@ -11,7 +11,8 @@
 #define TEXTURES_MAX 1024
 #define TRIS_MAX 2048
 #define FIFO_SIZE (256 * 1024)
-#define VERTEX_ARENA_SIZE (1536 * 1024)
+#define VERTEX_MAX 65536
+#define VERTEX_ARENA_SIZE (VERTEX_MAX * (sizeof(vec3_t) + sizeof(rgba_t) + sizeof(vec2_t)))
 #define NEAR_PLANE 16.0f
 // Far above any track or UI coordinate; NaN also fails the < test.
 #define VERTEX_LIMIT 1.0e7f
@@ -48,7 +49,10 @@ static int back = 1;
 static mat4_t model_mat, view_mat, sprite_mat, projection_mat_3d;
 static vec3_t camera_pos;
 static u8 *vertex_arena;
-static uint32_t vertex_arena_used;
+static vec3_t *vertex_positions;
+static rgba_t *vertex_colors;
+static vec2_t *vertex_uvs;
+static uint32_t vertex_base;
 static bool depth_write, depth_test;
 static float depth_offset;
 
@@ -121,6 +125,20 @@ static void drop_invalid_tris(void) {
 	tris_len = kept;
 }
 
+static void reset_vertex_streams(void) {
+	vertex_base = 0;
+	GX_SetArray(GX_VA_POS, vertex_positions, sizeof(vec3_t));
+	GX_SetArray(GX_VA_CLR0, vertex_colors, sizeof(rgba_t));
+	GX_SetArray(GX_VA_TEX0, vertex_uvs, sizeof(vec2_t));
+	GX_InvVtxCache();
+}
+
+static void flush_vertex_range(void *stream, uint32_t stride, uint32_t base, uint32_t count) {
+	uint32_t start = base * stride;
+	uint32_t end = ((base + count) * stride + 31) & ~31u;
+	DCFlushRange((u8 *)stream + start, end - start);
+}
+
 static void render_flush(void) {
 	PROF_WAIT_SNAPSHOT(submit_wait);
 	PROF_TIME_START(submit_start);
@@ -128,25 +146,23 @@ static void render_flush(void) {
 	if (!tris_len) { PROF_TIME_ADD(submit_ms, submit_start); return; }
 	gx_texture_t *texture = &textures[batch_texture];
 	uint32_t count = tris_len * 3;
-	uint32_t pos_bytes = (count * sizeof(vec3_t) + 31) & ~31u;
-	uint32_t color_bytes = (count * sizeof(rgba_t) + 31) & ~31u;
-	uint32_t uv_bytes = (count * sizeof(vec2_t) + 31) & ~31u;
-	uint32_t bytes = pos_bytes + color_bytes + uv_bytes;
-	if (vertex_arena_used + bytes > VERTEX_ARENA_SIZE) {
+	// Keep batches on separate cache lines so GX cannot reuse stale vertex data.
+	vertex_base = (vertex_base + 7) & ~7u;
+	if (vertex_base + count > VERTEX_MAX) {
 		WII_DIAG_PHASE(WII_PHASE_FLUSH_WAIT);
 		PROF_TIME_START(wait_start);
 		GX_DrawDone();
 		PROF_TIME_ADD(wait_ms, wait_start);
 		PROF_ADD(arena_waits, 1);
 		WII_DIAG_PHASE(WII_PHASE_UPDATE);
-		vertex_arena_used = 0;
+		reset_vertex_streams();
 	}
-	u8 *slice = vertex_arena + vertex_arena_used;
-	vertex_arena_used += bytes;
-	PROF_PEAK(arena_peak, vertex_arena_used);
-	vec3_t *positions = (vec3_t *)slice;
-	rgba_t *colors = (rgba_t *)(slice + pos_bytes);
-	vec2_t *uvs = (vec2_t *)(slice + pos_bytes + color_bytes);
+	uint32_t base = vertex_base;
+	vertex_base += count;
+	PROF_PEAK(arena_peak, vertex_base * (sizeof(vec3_t) + sizeof(rgba_t) + sizeof(vec2_t)));
+	vec3_t *positions = vertex_positions + base;
+	rgba_t *colors = vertex_colors + base;
+	vec2_t *uvs = vertex_uvs + base;
 	for (uint32_t i = 0; i < tris_len; i++) {
 		for (uint32_t j = 0; j < 3; j++) {
 			vertex_t *v = &tris_buffer[i].vertices[j];
@@ -156,15 +172,13 @@ static void render_flush(void) {
 			uvs[index] = vec2(v->uv.x / texture->padded_width, v->uv.y / texture->padded_height);
 		}
 	}
-	DCFlushRange(slice, bytes);
-	GX_InvVtxCache();
-	GX_SetArray(GX_VA_POS, positions, sizeof(vec3_t));
-	GX_SetArray(GX_VA_CLR0, colors, sizeof(rgba_t));
-	GX_SetArray(GX_VA_TEX0, uvs, sizeof(vec2_t));
+	flush_vertex_range(vertex_positions, sizeof(vec3_t), base, count);
+	flush_vertex_range(vertex_colors, sizeof(rgba_t), base, count);
+	flush_vertex_range(vertex_uvs, sizeof(vec2_t), base, count);
 	GX_LoadTexObj(&texture->obj, GX_TEXMAP0);
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, count);
 	for (uint32_t i = 0; i < count; i++) {
-		GX_Position1x16(i); GX_Color1x16(i); GX_TexCoord1x16(i);
+		GX_Position1x16(base + i); GX_Color1x16(base + i); GX_TexCoord1x16(base + i);
 	}
 	GX_End();
 #ifdef WII_DIAG
@@ -257,6 +271,9 @@ void render_init(vec2i_t size) {
 	fifo = memalign(32, FIFO_SIZE);
 	vertex_arena = memalign(32, VERTEX_ARENA_SIZE);
 	error_if(!vertex_arena, "GX vertex arena allocation failed");
+	vertex_positions = (vec3_t *)vertex_arena;
+	vertex_colors = (rgba_t *)(vertex_arena + VERTEX_MAX * sizeof(vec3_t));
+	vertex_uvs = (vec2_t *)(vertex_arena + VERTEX_MAX * (sizeof(vec3_t) + sizeof(rgba_t)));
 	error_if(!fifo, "GX FIFO allocation failed");
 	memset(fifo, 0, FIFO_SIZE);
 	GX_Init(fifo, FIFO_SIZE);
@@ -320,7 +337,7 @@ void render_set_post_effect(render_post_effect_t post) { (void)post; }
 vec2i_t render_size(void) { return screen_size; }
 void render_frame_prepare(void) {
 	running_stats = (render_stats_t){0};
-	vertex_arena_used = 0;
+	reset_vertex_streams();
 	view_mat = model_mat = sprite_mat = mat4_identity();
 	set_model_view();
 	depth_test = depth_write = false;
