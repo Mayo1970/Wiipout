@@ -147,11 +147,14 @@ static void render_flush(void) {
 	vec3_t *positions = (vec3_t *)slice;
 	rgba_t *colors = (rgba_t *)(slice + pos_bytes);
 	vec2_t *uvs = (vec2_t *)(slice + pos_bytes + color_bytes);
-	for (uint32_t i = 0; i < count; i++) {
-		vertex_t *v = &tris_buffer[i / 3].vertices[i % 3];
-		positions[i] = v->pos;
-		colors[i] = v->color;
-		uvs[i] = vec2(v->uv.x / texture->padded_width, v->uv.y / texture->padded_height);
+	for (uint32_t i = 0; i < tris_len; i++) {
+		for (uint32_t j = 0; j < 3; j++) {
+			vertex_t *v = &tris_buffer[i].vertices[j];
+			uint32_t index = i * 3 + j;
+			positions[index] = v->pos;
+			colors[index] = v->color;
+			uvs[index] = vec2(v->uv.x / texture->padded_width, v->uv.y / texture->padded_height);
+		}
 	}
 	DCFlushRange(slice, bytes);
 	GX_InvVtxCache();

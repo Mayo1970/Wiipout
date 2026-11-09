@@ -9,6 +9,10 @@
 #include "camera.h"
 #include "game.h"
 
+static track_face_t **visible_faces, **sorted_faces;
+static uint32_t *texture_offsets;
+static bool *texture_transparent;
+
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
 
@@ -24,6 +28,7 @@ void track_load(const char *base_path) {
 	
 	image_t *temp_tile = image_alloc(temp_tile_size, temp_tile_size);
 	int len = wipeout64_mode ? cmp->len : ttf->len;
+	texture_transparent = mem_bump(sizeof(bool) * len);
 	for (int i = 0; i < len; i++) {
 		for (int tx = 0; tx < tiles; tx++) {
 			for (int ty = 0; ty < tiles; ty++) {
@@ -32,6 +37,9 @@ void track_load(const char *base_path) {
 				image_copy(sub_tile, temp_tile, 0, 0, sub_tile_size, sub_tile_size, tx * sub_tile_size, ty * sub_tile_size);
 				mem_temp_free(sub_tile);
 			}
+		}
+		for (int p = 0; p < temp_tile->width * temp_tile->height; p++) {
+			if (temp_tile->pixels[p].a < 255) texture_transparent[i] = true;
 		}
 		render_texture_create(temp_tile->width, temp_tile->height, temp_tile->pixels);
 		g.track.textures.len++;
@@ -50,6 +58,9 @@ void track_load(const char *base_path) {
 	if (file_exists(tex_path)) track_load_texture_file(tex_path);
 
 	track_load_sections(get_path(base_path, "track.trs"));
+	visible_faces = mem_bump(sizeof(*visible_faces) * g.track.face_count);
+	sorted_faces = mem_bump(sizeof(*sorted_faces) * g.track.face_count);
+	texture_offsets = mem_bump(sizeof(*texture_offsets) * g.track.textures.len);
 
 	g.track.pickups_len = 0;
 	section_t *s = g.track.sections;
@@ -301,6 +312,17 @@ void track_draw_section(section_t *section) {
 	}
 }
 
+static bool track_face_ordered(track_face_t *face, vec3_t cam_pos) {
+	if (texture_transparent[face->texture]) return true;
+	for (int i = 0; i < 2; i++) {
+		for (int j = 0; j < 3; j++) {
+			vertex_t *v = &face->tris[i].vertices[j];
+			if (v->color.a < 255 || vec3_len_sq(vec3_sub(v->pos, cam_pos)) > RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR) return true;
+		}
+	}
+	return false;
+}
+
 void track_draw(camera_t *camera) {	
 	render_set_model_mat(&mat4_identity());
 
@@ -308,6 +330,8 @@ void track_draw(camera_t *camera) {
 	// behind. Ideally we'd want to do a full frustum culling here. FIXME.
 	vec3_t cam_pos = camera->position;
 	vec3_t cam_dir = camera_forward(camera);
+	uint32_t visible_count = 0;
+	for (int i = 0; i < g.track.textures.len; i++) texture_offsets[i] = 0;
 	
 	for(int32_t i = 0; i < g.track.section_count; i++) {
 		section_t *s = &g.track.sections[i];
@@ -320,7 +344,39 @@ void track_draw(camera_t *camera) {
 			cam_dot < RENDER_FADEOUT_FAR + s->radius
 		) {
 			PROF_ADD(track_drawn, 1);
-			track_draw_section(s);
+			for (int j = 0; j < s->face_count; j++) {
+				track_face_t *face = &g.track.faces[s->face_start + j];
+				texture_from_list(g.track.textures, face->texture);
+				error_if(visible_count >= g.track.face_count, "Too many visible track faces");
+				visible_faces[visible_count++] = face;
+				if (!track_face_ordered(face, cam_pos)) texture_offsets[face->texture]++;
+				PROF_ADD(faces, 1);
+			}
+		}
+	}
+
+	uint32_t sorted_count = 0;
+	for (int i = 0; i < g.track.textures.len; i++) {
+		uint32_t count = texture_offsets[i];
+		texture_offsets[i] = sorted_count;
+		sorted_count += count;
+	}
+	for (uint32_t i = 0; i < visible_count; i++) {
+		track_face_t *face = visible_faces[i];
+		if (!track_face_ordered(face, cam_pos)) sorted_faces[texture_offsets[face->texture]++] = face;
+	}
+	for (uint32_t i = 0; i < sorted_count; i++) {
+		track_face_t *face = sorted_faces[i];
+		uint16_t texture = texture_from_list(g.track.textures, face->texture);
+		render_push_tris(face->tris[0], texture);
+		render_push_tris(face->tris[1], texture);
+	}
+	for (uint32_t i = 0; i < visible_count; i++) {
+		track_face_t *face = visible_faces[i];
+		if (track_face_ordered(face, cam_pos)) {
+			uint16_t texture = texture_from_list(g.track.textures, face->texture);
+			render_push_tris(face->tris[0], texture);
+			render_push_tris(face->tris[1], texture);
 		}
 	}
 }
