@@ -755,6 +755,7 @@ uint16_t render_texture_create(uint32_t tw, uint32_t th, rgba_t *pixels) {
     return texture_index;
 }
 
+void render_texture_set_repeat(uint16_t texture_index, bool repeat) { (void)texture_index; (void)repeat; }
 vec2i_t render_texture_size(uint16_t texture_index) {
     error_if(texture_index >= textures_len, "Invalid texture %d", texture_index);
     return textures[texture_index].size;

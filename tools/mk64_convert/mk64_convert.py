@@ -267,6 +267,8 @@ def texture_map(root, course):
 
 
 def tim_image(w, h, pixels):
+    if not w or not h or w & (w-1) or h & (h-1):
+        raise ValueError(f'texture dimensions must be powers of two: {w}x{h}')
     if w > 256 or h > 256:
         raise ValueError(f'texture too large for PRM UVs: {w}x{h}')
     words = []
@@ -332,29 +334,34 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
         if symbol and (not path or not path.exists()): missing.add(symbol)
         tex = None
         if not no_textures and path and path.exists() and state.get('enabled', True):
-            if path not in paths:
+            modes = state.get('modes', ('G_TX_WRAP', 'G_TX_WRAP'))
+            mirror = tuple('G_TX_MIRROR' in mode and 'G_TX_CLAMP' not in mode for mode in modes)
+            key = (path, *mirror)
+            if key not in paths:
                 w, h, pixels = png(path)
-                paths[path] = len(tims)
-                dims[path] = (w, h)
-                tims.append(tim_image(w, h, pixels))
-            tex = paths[path]
+                nw, nh = w * (1 + mirror[0]), h * (1 + mirror[1])
+                pixels = [pixels[(y if y < h else 2*h-1-y)*w + (x if x < w else 2*w-1-x)] for y in range(nh) for x in range(nw)]
+                paths[key] = len(tims)
+                dims[key] = (nw, nh)
+                tims.append(tim_image(nw, nh, pixels))
+            tex = paths[key]
         coords = [tuple(v*scale*s for v, s in zip(vertices[i][0], (1,-1,-1))) for i in tri]
         colors = [vertices[i][1] for i in tri]
         pieces = []
         if tex is not None:
-            w, h = dims[path]
+            w, h = dims[key]
             modes = state.get('modes', ('G_TX_WRAP', 'G_TX_WRAP'))
-            masks = state.get('masks', (0, 0))
             tile = state.get('tile', (0,0,w-1,h-1))
-            periods = [2**masks[j] if masks[j] else (w,h)[j] for j in range(2)]
+            periods = [(255 // size) * size if size < 256 else 256 for size in (w,h)]
             scales = state.get('scale', (1,1))
             poly = [(*p, *c, *(vertices[i][2][j]/32*scales[j]-tile[j] for j in range(2))) for i,p,c in zip(tri, coords, colors)]
             ranges = []
+            origins = [math.floor(min(v[6+j] for v in poly) / (w,h)[j]) * (w,h)[j] for j in range(2)]
             for j in range(2):
                 if 'G_TX_CLAMP' in modes[j]: ranges.append([-1, 0, 1])
                 else:
-                    lo = math.floor(min(v[6+j] for v in poly)/periods[j])
-                    hi = math.ceil(max(v[6+j] for v in poly)/periods[j])-1
+                    lo = math.floor((min(v[6+j] for v in poly)-origins[j])/periods[j])
+                    hi = math.ceil((max(v[6+j] for v in poly)-origins[j])/periods[j])-1
                     ranges.append(range(lo, max(lo,hi)+1))
             if len(ranges[0])*len(ranges[1]) > 256:
                 capped += 1
@@ -372,8 +379,8 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
                                     if clipped: clipped = clip(clipped, 6+j, limit, False)
                                 else: clipped = clip(clipped, 6+j, limit, True)
                             else:
-                                clipped = clip(clipped, 6+j, cell*periods[j], True)
-                                if clipped: clipped = clip(clipped, 6+j, (cell+1)*periods[j], False)
+                                clipped = clip(clipped, 6+j, origins[j]+cell*periods[j], True)
+                                if clipped: clipped = clip(clipped, 6+j, origins[j]+(cell+1)*periods[j], False)
                             if not clipped: break
                         for k in range(1,len(clipped)-1):
                             pp = [clipped[0],clipped[k],clipped[k+1]]
@@ -383,9 +390,8 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
                                 for j, cell in enumerate((u,v)):
                                     x = vertex[6+j]
                                     if 'G_TX_CLAMP' not in modes[j]:
-                                        x -= cell*periods[j]
-                                        if 'G_TX_MIRROR' in modes[j] and cell % 2: x = periods[j]-x
-                                    limit = min((w,h)[j]-1, tile[j+2]-tile[j]) if 'G_TX_CLAMP' in modes[j] else (w,h)[j]-1
+                                        x -= origins[j]+cell*periods[j]
+                                    limit = min((w,h)[j]-1, tile[j+2]-tile[j]) if 'G_TX_CLAMP' in modes[j] else 255
                                     values.append(max(0,min(int(limit),round(x))))
                                 uv.append(tuple(values))
                             pieces.append((pp, uv))

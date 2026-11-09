@@ -49,6 +49,7 @@ def compressed(path):
         magic, kind, block, x, y, width, height = struct.unpack_from('<IIIHHHH', tim)
         assert magic == 0x10 and kind == 2 and block == 12+width*height*2
         assert len(tim) == 8+block and 1 <= width <= 256 and 1 <= height <= 256
+        assert width & (width-1) == 0 and height & (height-1) == 0
         dimensions.append((width, height))
         offset += size
     return dimensions
@@ -75,9 +76,8 @@ def objects(path, textures):
                 assert pos+36 <= len(data)
                 texture, = struct.unpack_from('>h', data, pos+10)
                 assert 0 <= texture < len(textures)
-                w, h = textures[texture]
                 uv = data[pos+16:pos+22]
-                assert all(uv[i] < (w if i % 2 == 0 else h) for i in range(6))
+                assert len(uv) == 6 and all(0 <= value <= 255 for value in uv)
                 pos += 36
             else:
                 pos += 24

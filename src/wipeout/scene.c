@@ -70,6 +70,9 @@ void scene_load(const char *base_path, float sky_y_offset) {
 		sky_object = objects_load(get_path(base_path, "sky.prm"), sky_textures);
 
 		texture_list_t scene_textures = image_get_compressed_textures(get_path(base_path, multiplayer ? "sceneMul.cmp" : "scene.cmp"));
+		if (def.circuits[g.circuit].release == GAME_MK64) {
+			for (int i = 0; i < scene_textures.len; i++) render_texture_set_repeat(scene_textures.start + i, true);
+		}
 		scene_objects = objects_load(get_path(base_path, multiplayer ? "sceneMul.prm" : "scene.prm"), scene_textures);
 	}
 	
