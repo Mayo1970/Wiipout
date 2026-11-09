@@ -17,6 +17,7 @@ typedef struct track_face_t {
 	tris_t tris[2];
 	vec3_t normal;
 	uint8_t flags;
+	uint8_t ext_flags;
 	uint8_t texture;
 } track_face_t;
 
@@ -28,6 +29,7 @@ typedef struct track_face_t {
 #define FACE_BOOST            (1<<5)
 #define FACE_PICKUP_COLLECTED (1<<6)
 #define FACE_PICKUP_ACTIVE    (1<<7)
+#define FACE_EXT_COLLISION_ONLY (1<<0)
 
 typedef struct {
 	uint16_t near[16];

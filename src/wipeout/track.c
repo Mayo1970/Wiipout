@@ -15,6 +15,7 @@ static track_face_t **visible_faces, **sorted_faces;
 static uint32_t *texture_offsets, *far_texture_offsets;
 static bool *texture_transparent;
 static track_face_class_t *visible_classes;
+static void track_load_collision_file(char *file_name);
 
 void track_load(const char *base_path) {
 	// Load and assemble high res track tiles
@@ -59,6 +60,9 @@ void track_load(const char *base_path) {
 	// Wipeout 2097 .tex loading
 	char *tex_path = get_path(base_path, "track.tex");
 	if (file_exists(tex_path)) track_load_texture_file(tex_path);
+
+	char *collision_path = get_path(base_path, "track.trc");
+	if (platform_asset_exists(collision_path)) track_load_collision_file(collision_path);
 
 	track_load_sections(get_path(base_path, "track.trs"));
 	visible_faces = mem_bump(sizeof(*visible_faces) * g.track.face_count);
@@ -195,6 +199,7 @@ void track_load_faces(char *file_name, vec3_t *vertices) {
 
 		tf->texture = get_i8(bytes, &p);
 		tf->flags = get_i8(bytes, &p);
+		tf->ext_flags = 0;
 
 		const vec2_t *uv;
 		rgba_t color = rgba_from_u32(get_u32(bytes, &p));
@@ -231,6 +236,16 @@ void track_load_texture_file(char *tex_path) {
 	for (int i = 0; i < g.track.face_count; i++) {
 		g.track.faces[i].texture = get_u8(bytes, &p);
 		g.track.faces[i].flags = get_u8(bytes, &p);
+	}
+	mem_temp_free(bytes);
+}
+
+static void track_load_collision_file(char *file_name) {
+	uint32_t size;
+	uint8_t *bytes = platform_load_asset(file_name, &size);
+	error_if(size != g.track.face_count, "Invalid collision face count in %s: got %u, expected %d", file_name, size, g.track.face_count);
+	for (int i = 0; i < g.track.face_count; i++) {
+		g.track.faces[i].ext_flags = bytes[i] & FACE_EXT_COLLISION_ONLY;
 	}
 	mem_temp_free(bytes);
 }
@@ -309,6 +324,10 @@ void track_draw_section(section_t *section) {
 	int16_t face_count = section->face_count;
 	
 	for (uint32_t j = 0; j < face_count; j++) {
+		if (flags_is(face->ext_flags, FACE_EXT_COLLISION_ONLY)) {
+			face++;
+			continue;
+		}
 		PROF_ADD(faces, 1);
 		uint16_t tex_index = texture_from_list(g.track.textures, face->texture);
 		render_push_tris(face->tris[0], tex_index);
@@ -359,6 +378,7 @@ void track_draw(camera_t *camera) {
 			bool section_near = near_limit > 0 && vec3_len_sq(diff) < near_limit * near_limit;
 			for (int j = 0; j < s->face_count; j++) {
 				track_face_t *face = &g.track.faces[s->face_start + j];
+				if (flags_is(face->ext_flags, FACE_EXT_COLLISION_ONLY)) continue;
 				texture_from_list(g.track.textures, face->texture);
 				error_if(visible_count >= g.track.face_count, "Too many visible track faces");
 				visible_faces[visible_count] = face;
