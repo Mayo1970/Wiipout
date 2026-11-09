@@ -304,8 +304,15 @@ static void page_options_controls_init(menu_t *menu) {
 
 	menu_page_add_toggle(page, save.vibration_toggle, "VIBRATION", vibration_options, len(vibration_options), toggle_vibration_toggle);
 	menu_page_add_toggle(page, save.modern_camera, "LOOK STYLE", modern_camera, len(modern_camera), toggle_modern_camera);
+#ifdef PLATFORM_WII
+	// Full labels plus MODERATE are wider than the 320 block and overlap.
+	menu_page_add_toggle(page, save.analog_response - 1, "L ANALOG RESPONSE", analog_response, len(analog_response), toggle_analog_response);
+	menu_page_add_toggle(page, save.r_analog_response - 1, "R ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);
+#else
 	menu_page_add_toggle(page, save.analog_response - 1, "LEFT ANALOG RESPONSE", analog_response, len(analog_response), toggle_analog_response);
-	menu_page_add_toggle(page, save.r_analog_response - 1, "RIGHT ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);}
+	menu_page_add_toggle(page, save.r_analog_response - 1, "RIGHT ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);
+#endif
+}
 
 // -----------------------------------------------------------------------------
 // Options Video
