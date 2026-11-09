@@ -15,6 +15,8 @@ static void page_options_init(menu_t *menu);
 static void page_race_class_init(menu_t *menu);
 static void page_race_type_init(menu_t *menu);
 static void page_team_init(menu_t *menu);
+static void page_players_init(menu_t *menu);
+static void page_pilot2_init(menu_t *menu);
 static void page_pilot_init(menu_t *menu);
 static void page_circuit_init(menu_t *menu);
 static void page_options_controls_init(menu_t *menu);
@@ -560,7 +562,7 @@ static void page_race_class_init(menu_t *menu) {
 static void button_race_type_select(menu_t *menu, int data) {
 	g.race_type = data;
 	g.highscore_tab = g.race_type == RACE_TYPE_TIME_TRIAL ? HIGHSCORE_TAB_TIME_TRIAL : HIGHSCORE_TAB_RACE;
-	page_team_init(menu);
+	page_players_init(menu);
 }
 
 static void page_race_type_draw(menu_t *menu, int data) {
@@ -583,6 +585,18 @@ static void page_race_type_init(menu_t *menu) {
 	}
 }
 
+
+
+static void button_players_select(menu_t *menu, int data) {
+	g.players = data;
+	page_team_init(menu);
+}
+
+static void page_players_init(menu_t *menu) {
+	menu_page_t *page = menu_push(menu, "SELECT PLAYERS", NULL);
+	menu_page_add_button(page, 1, "1 PLAYER", button_players_select);
+	menu_page_add_button(page, 2, "2 PLAYERS", button_players_select);
+}
 
 
 // -----------------------------------------------------------------------------
@@ -617,8 +631,7 @@ static void page_team_init(menu_t *menu) {
 // -----------------------------------------------------------------------------
 // Pilot
 
-static void button_pilot_select(menu_t *menu, int data) {
-	g.pilot = data;
+static void finish_pilot_select(menu_t *menu) {
 	if (g.race_type != RACE_TYPE_CHAMPIONSHIP) {
 		page_circuit_init(menu);
 	}
@@ -626,6 +639,21 @@ static void button_pilot_select(menu_t *menu, int data) {
 		g.circuit = 0;
 		game_reset_championship();
 		game_set_scene(GAME_SCENE_RACE);
+	}
+}
+
+static void button_pilot2_select(menu_t *menu, int data) {
+	g.pilots[1] = data;
+	finish_pilot_select(menu);
+}
+
+static void button_pilot_select(menu_t *menu, int data) {
+	g.pilot = data;
+	if (g.players == 2) {
+		page_pilot2_init(menu);
+	}
+	else {
+		finish_pilot_select(menu);
 	}
 }
 
@@ -642,6 +670,19 @@ static void page_pilot_init(menu_t *menu) {
 	page->items_anchor = UI_POS_BOTTOM | UI_POS_CENTER;
 	for (int i = 0; i < len(def.teams[g.team].pilots); i++) {
 		menu_page_add_button(page, def.teams[g.team].pilots[i], def.pilots[def.teams[g.team].pilots[i]].name, button_pilot_select);
+	}
+}
+
+
+static void page_pilot2_init(menu_t *menu) {
+	menu_page_t *page = menu_push(menu, "PLAYER 2 CHOOSE PILOT", page_pilot_draw);
+	flags_add(page->layout_flags, MENU_FIXED);
+	page->title_pos = vec2i(0, 30);
+	page->title_anchor = UI_POS_TOP | UI_POS_CENTER;
+	page->items_pos = vec2i(0, -110);
+	page->items_anchor = UI_POS_BOTTOM | UI_POS_CENTER;
+	for (int i = 0; i < len(def.pilots); i++) {
+		if (i != g.pilot) menu_page_add_button(page, i, def.pilots[i].name, button_pilot2_select);
 	}
 }
 

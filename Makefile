@@ -19,6 +19,7 @@ WII_PROFILE_WINDOW ?=
 WII_SMOKE ?= 0
 WII_SMOKE_INTRO ?= 0
 WII_SMOKE_FULL ?= 0
+WII_SMOKE_2P ?= 0
 ifeq ($(PLATFORM),WII)
 ifeq ($(WII_SMOKE_FULL),1)
 WII_BUILD_DIR = build/wii-smoke-full
@@ -159,6 +160,9 @@ else ifeq ($(WII_SMOKE_INTRO),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE -DWII_SMOKE_INTRO
 else ifeq ($(WII_SMOKE),1)
 	C_FLAGS := $(C_FLAGS) -DWII_SMOKE
+endif
+ifeq ($(WII_SMOKE_2P),1)
+	C_FLAGS := $(C_FLAGS) -DWII_SMOKE_2P
 endif
 endif
 

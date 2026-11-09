@@ -37,9 +37,11 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include "mem.h"
 #include "utils.h"
 #include "input.h"
+#if defined(WII_SMOKE) || defined(WII_PROFILE)
+#include "wipeout/game.h"
+#endif
 
 #ifdef WII_SMOKE
-#include "wipeout/game.h"
 #include "wipeout/ship.h"
 #include "wipeout/ship_ai.h"
 #include "wipeout/ship_player.h"
@@ -311,6 +313,24 @@ static void platform_smoke_update(void) {
 	// The release is always sent so RETURN is never left held when the race loads.
 	if (return_ready && !smoke_race_seen && smoke_frame % 30 == 0) input_set_button_state(INPUT_KEY_RETURN, 1.0f);
 	if (smoke_frame % 30 == 1) input_set_button_state(INPUT_KEY_RETURN, 0.0f);
+#ifdef WII_SMOKE_2P
+	// The players page sets 1 on RETURN; forcing 2 until the race also adds the P2 pilot page.
+	if (!smoke_race_seen) g.players = 2;
+	if (smoke_race_seen) {
+		static float last_shake[2];
+		static uint32_t last_flags[2];
+		for (int i = 0; i < 2; i++) {
+			ship_t *p = &g.ships[g.pilots[i]];
+			if (p->update_func == ship_player_update_race) p->update_func = ship_ai_update_race;
+			if (g.cameras[i].shake_timer > last_shake[i] + 0.001f)
+				printf("SMOKE2P shake cam=%d frame %u timer=%.2f\n", i, (unsigned int)smoke_frame, g.cameras[i].shake_timer);
+			if (p->flags != last_flags[i])
+				printf("SMOKE2P flags p%d frame %u %08x -> %08x\n", i + 1, (unsigned int)smoke_frame, (unsigned int)last_flags[i], (unsigned int)p->flags);
+			last_shake[i] = g.cameras[i].shake_timer;
+			last_flags[i] = p->flags;
+		}
+	}
+#endif
 	if (smoke_race_seen) {
 		ship_t *ship = &g.ships[g.pilot];
 		// AI drives the player ship; flags stay untouched so the HUD still draws.
@@ -339,7 +359,11 @@ static void platform_smoke_update(void) {
 			return;
 		}
 #else
+#ifdef WII_SMOKE_2P
+		if (!smoke_lap_done && ship->max_lap >= 2) {
+#else
 		if (!smoke_lap_done && ship->max_lap >= 1) {
+#endif
 			smoke_lap_done = true;
 			smoke_lap_frame = smoke_frame;
 			printf("SMOKE lap 1 done frame %u\n", (unsigned int)smoke_frame);
@@ -418,103 +442,107 @@ static void platform_rumble_off(void) {
 }
 
 static void platform_pump_events(void) {
-	static float last[WII_PAD_COUNT];
-	static bool cc_format_sent;
-	static bool tilt_brake_left, tilt_brake_right;
-	float pad[WII_PAD_COUNT] = {0};
-	u32 type;
+	static float last[2][WII_PAD_COUNT];
+	static bool cc_format_sent[2];
+	static bool tilt_brake_left[2], tilt_brake_right[2];
 	WPAD_ScanPads();
 	PAD_ScanPads();
-	WPADData *data = WPAD_Data(WPAD_CHAN_0);
-	bool connected = WPAD_Probe(WPAD_CHAN_0, &type) == WPAD_ERR_NONE && data && data->err == WPAD_ERR_NONE;
-	if (!connected || type != WPAD_EXP_NONE) tilt_brake_left = tilt_brake_right = false;
-	if (connected && type == WPAD_EXP_CLASSIC) {
-		if (!cc_format_sent) {
-			// Retry the format after the Classic Controller handshake completes.
-			WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
-			cc_format_sent = true;
+	for (int player = 0; player < 2; player++) {
+		float pad[WII_PAD_COUNT] = {0};
+		u32 type;
+		WPADData *data = WPAD_Data(player);
+		bool connected = WPAD_Probe(player, &type) == WPAD_ERR_NONE && data && data->err == WPAD_ERR_NONE;
+		if (!connected || type != WPAD_EXP_NONE) tilt_brake_left[player] = tilt_brake_right[player] = false;
+		if (connected && type == WPAD_EXP_CLASSIC) {
+			if (!cc_format_sent[player]) {
+				// Retry the format after the Classic Controller handshake completes.
+				WPAD_SetDataFormat(player, WPAD_FMT_BTNS_ACC_IR);
+				cc_format_sent[player] = true;
+			}
 		}
-	}
-	else cc_format_sent = false;
-	if (connected) {
-		u32 held = data->btns_h;
-		if (data->btns_d & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) platform_exit();
-		if (type == WPAD_EXP_CLASSIC && data->exp.type == (int)type) {
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, WPAD_CLASSIC_BUTTON_UP);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, WPAD_CLASSIC_BUTTON_DOWN);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, WPAD_CLASSIC_BUTTON_LEFT);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, WPAD_CLASSIC_BUTTON_RIGHT);
-			platform_pad_button(pad, INPUT_GAMEPAD_A, held, WPAD_CLASSIC_BUTTON_B);
-			platform_pad_button(pad, INPUT_GAMEPAD_X, held, WPAD_CLASSIC_BUTTON_Y);
-			platform_pad_button(pad, INPUT_GAMEPAD_B, held, WPAD_CLASSIC_BUTTON_A);
-			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
-			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
-			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
-			platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZL);
-			platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZR);
-			// The analog L/R read 1.0 at rest on hardware (both air brakes on), so only the digital click counts.
+		else cc_format_sent[player] = false;
+		if (connected) {
+			u32 held = data->btns_h;
+			if (player == 0 && (data->btns_d & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME))) platform_exit();
+			if (type == WPAD_EXP_CLASSIC && data->exp.type == (int)type) {
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, WPAD_CLASSIC_BUTTON_UP);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, WPAD_CLASSIC_BUTTON_DOWN);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, WPAD_CLASSIC_BUTTON_LEFT);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, WPAD_CLASSIC_BUTTON_RIGHT);
+				platform_pad_button(pad, INPUT_GAMEPAD_A, held, WPAD_CLASSIC_BUTTON_B);
+				platform_pad_button(pad, INPUT_GAMEPAD_X, held, WPAD_CLASSIC_BUTTON_Y);
+				platform_pad_button(pad, INPUT_GAMEPAD_B, held, WPAD_CLASSIC_BUTTON_A);
+				platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_CLASSIC_BUTTON_X);
+				platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_L);
+				platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_FULL_R);
+				platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZL);
+				platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_CLASSIC_BUTTON_ZR);
+				// The analog L/R read 1.0 at rest on hardware (both air brakes on), so only the digital click counts.
 #ifdef WII_DIAG
-			diag_cc_l = data->exp.classic.l_shoulder;
-			diag_cc_r = data->exp.classic.r_shoulder;
-			diag_cc_type = data->exp.classic.type;
-			diag_cc_ls_raw = data->exp.classic.ls_raw;
-			diag_cc_rs_raw = data->exp.classic.rs_raw;
-			diag_cc_btns = data->exp.classic.btns;
+				if (player == 0) {
+					diag_cc_l = data->exp.classic.l_shoulder;
+					diag_cc_r = data->exp.classic.r_shoulder;
+					diag_cc_type = data->exp.classic.type;
+					diag_cc_ls_raw = data->exp.classic.ls_raw;
+					diag_cc_rs_raw = data->exp.classic.rs_raw;
+					diag_cc_btns = data->exp.classic.btns;
+				}
 #endif
-			platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
-			platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
-			platform_pad_button(pad, INPUT_GAMEPAD_SELECT, held, WPAD_CLASSIC_BUTTON_MINUS);
-			platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_CLASSIC_BUTTON_PLUS);
-			platform_pad_joystick(pad, &data->exp.classic.ljs, false);
-			platform_pad_joystick(pad, &data->exp.classic.rjs, true);
-		}
-		else if (type == WPAD_EXP_NONE || (type == WPAD_EXP_NUNCHUK && data->exp.type == (int)type)) {
-			bool nunchuk = type == WPAD_EXP_NUNCHUK;
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, nunchuk ? WPAD_BUTTON_UP : WPAD_BUTTON_RIGHT);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, nunchuk ? WPAD_BUTTON_DOWN : WPAD_BUTTON_LEFT);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, nunchuk ? WPAD_BUTTON_LEFT : WPAD_BUTTON_UP);
-			platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, nunchuk ? WPAD_BUTTON_RIGHT : WPAD_BUTTON_DOWN);
-			platform_pad_button(pad, INPUT_GAMEPAD_A, held, nunchuk ? WPAD_BUTTON_A : WPAD_BUTTON_2);
-			platform_pad_button(pad, INPUT_GAMEPAD_X, held, nunchuk ? WPAD_BUTTON_B : WPAD_BUTTON_1);
-			if (nunchuk) {
-				platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_NUNCHUK_BUTTON_Z);
-				platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_NUNCHUK_BUTTON_C);
+				platform_pad_button(pad, INPUT_GAMEPAD_L_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZL);
+				platform_pad_button(pad, INPUT_GAMEPAD_R_TRIGGER, held, WPAD_CLASSIC_BUTTON_ZR);
+				platform_pad_button(pad, INPUT_GAMEPAD_SELECT, held, WPAD_CLASSIC_BUTTON_MINUS);
+				platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_CLASSIC_BUTTON_PLUS);
+				platform_pad_joystick(pad, &data->exp.classic.ljs, false);
+				platform_pad_joystick(pad, &data->exp.classic.rjs, true);
 			}
-			else {
-				float y = data->gforce.y;
-				tilt_brake_left = tilt_brake_left ? y >= WII_TILT_BRAKE_OFF : y >= WII_TILT_BRAKE_ON;
-				tilt_brake_right = tilt_brake_right ? y <= -WII_TILT_BRAKE_OFF : y <= -WII_TILT_BRAKE_ON;
-				if (tilt_brake_left) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, 1.0f);
-				if (tilt_brake_right) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, 1.0f);
+			else if (type == WPAD_EXP_NONE || (type == WPAD_EXP_NUNCHUK && data->exp.type == (int)type)) {
+				bool nunchuk = type == WPAD_EXP_NUNCHUK;
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, held, nunchuk ? WPAD_BUTTON_UP : WPAD_BUTTON_RIGHT);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, held, nunchuk ? WPAD_BUTTON_DOWN : WPAD_BUTTON_LEFT);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, held, nunchuk ? WPAD_BUTTON_LEFT : WPAD_BUTTON_UP);
+				platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, held, nunchuk ? WPAD_BUTTON_RIGHT : WPAD_BUTTON_DOWN);
+				platform_pad_button(pad, INPUT_GAMEPAD_A, held, nunchuk ? WPAD_BUTTON_A : WPAD_BUTTON_2);
+				platform_pad_button(pad, INPUT_GAMEPAD_X, held, nunchuk ? WPAD_BUTTON_B : WPAD_BUTTON_1);
+				if (nunchuk) {
+					platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, held, WPAD_NUNCHUK_BUTTON_Z);
+					platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, held, WPAD_NUNCHUK_BUTTON_C);
+				}
+				else {
+					float y = data->gforce.y;
+					tilt_brake_left[player] = tilt_brake_left[player] ? y >= WII_TILT_BRAKE_OFF : y >= WII_TILT_BRAKE_ON;
+					tilt_brake_right[player] = tilt_brake_right[player] ? y <= -WII_TILT_BRAKE_OFF : y <= -WII_TILT_BRAKE_ON;
+					if (tilt_brake_left[player]) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, 1.0f);
+					if (tilt_brake_right[player]) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, 1.0f);
+				}
+				platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_BUTTON_MINUS);
+				platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_BUTTON_PLUS);
+				if (nunchuk) platform_pad_joystick(pad, &data->exp.nunchuk.js, false);
 			}
-			platform_pad_button(pad, INPUT_GAMEPAD_Y, held, WPAD_BUTTON_MINUS);
-			platform_pad_button(pad, INPUT_GAMEPAD_START, held, WPAD_BUTTON_PLUS);
-			if (nunchuk) platform_pad_joystick(pad, &data->exp.nunchuk.js, false);
 		}
-	}
-	u32 gc = PAD_ButtonsHeld(PAD_CHAN0);
-	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, gc, PAD_BUTTON_UP);
-	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, gc, PAD_BUTTON_DOWN);
-	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, gc, PAD_BUTTON_LEFT);
-	platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, gc, PAD_BUTTON_RIGHT);
-	platform_pad_button(pad, INPUT_GAMEPAD_A, gc, PAD_BUTTON_A);
-	platform_pad_button(pad, INPUT_GAMEPAD_X, gc, PAD_BUTTON_B);
-	platform_pad_button(pad, INPUT_GAMEPAD_B, gc, PAD_BUTTON_X);
-	platform_pad_button(pad, INPUT_GAMEPAD_Y, gc, PAD_BUTTON_Y);
-	platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, gc, PAD_TRIGGER_L);
-	platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, gc, PAD_TRIGGER_R);
-	float left = PAD_TriggerL(PAD_CHAN0) / 255.0f;
-	float right = PAD_TriggerR(PAD_CHAN0) / 255.0f;
-	if (left > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, left);
-	if (right > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, right);
-	platform_pad_button(pad, INPUT_GAMEPAD_SELECT, gc, PAD_TRIGGER_Z);
-	platform_pad_button(pad, INPUT_GAMEPAD_START, gc, PAD_BUTTON_START);
-	platform_pad_stick(pad, PAD_StickX(PAD_CHAN0) / 72.0f, PAD_StickY(PAD_CHAN0) / 72.0f, false);
-	platform_pad_stick(pad, PAD_SubStickX(PAD_CHAN0) / 72.0f, PAD_SubStickY(PAD_CHAN0) / 72.0f, true);
-	for (int i = 0; i < WII_PAD_COUNT; i++) {
-		if (pad[i] != last[i]) {
-			input_set_button_state(INPUT_GAMEPAD_A + i, pad[i]);
-			last[i] = pad[i];
+		u32 gc = PAD_ButtonsHeld(player);
+		platform_pad_button(pad, INPUT_GAMEPAD_DPAD_UP, gc, PAD_BUTTON_UP);
+		platform_pad_button(pad, INPUT_GAMEPAD_DPAD_DOWN, gc, PAD_BUTTON_DOWN);
+		platform_pad_button(pad, INPUT_GAMEPAD_DPAD_LEFT, gc, PAD_BUTTON_LEFT);
+		platform_pad_button(pad, INPUT_GAMEPAD_DPAD_RIGHT, gc, PAD_BUTTON_RIGHT);
+		platform_pad_button(pad, INPUT_GAMEPAD_A, gc, PAD_BUTTON_A);
+		platform_pad_button(pad, INPUT_GAMEPAD_X, gc, PAD_BUTTON_B);
+		platform_pad_button(pad, INPUT_GAMEPAD_B, gc, PAD_BUTTON_X);
+		platform_pad_button(pad, INPUT_GAMEPAD_Y, gc, PAD_BUTTON_Y);
+		platform_pad_button(pad, INPUT_GAMEPAD_L_SHOULDER, gc, PAD_TRIGGER_L);
+		platform_pad_button(pad, INPUT_GAMEPAD_R_SHOULDER, gc, PAD_TRIGGER_R);
+		float left = PAD_TriggerL(player) / 255.0f;
+		float right = PAD_TriggerR(player) / 255.0f;
+		if (left > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_L_SHOULDER, left);
+		if (right > 0.15f) platform_pad_value(pad, INPUT_GAMEPAD_R_SHOULDER, right);
+		platform_pad_button(pad, INPUT_GAMEPAD_SELECT, gc, PAD_TRIGGER_Z);
+		platform_pad_button(pad, INPUT_GAMEPAD_START, gc, PAD_BUTTON_START);
+		platform_pad_stick(pad, PAD_StickX(player) / 72.0f, PAD_StickY(player) / 72.0f, false);
+		platform_pad_stick(pad, PAD_SubStickX(player) / 72.0f, PAD_SubStickY(player) / 72.0f, true);
+		for (int i = 0; i < WII_PAD_COUNT; i++) {
+			if (pad[i] != last[player][i]) {
+				input_set_player_button_state(player, INPUT_GAMEPAD_A + i, pad[i]);
+				last[player][i] = pad[i];
+			}
 		}
 	}
 	// Motors are on/off only, so strength is approximated by frame-rate PWM.
@@ -1185,7 +1213,7 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 
 static void profile_print(const char *kind, const profile_stats_t *s) {
 	if (!s->frames) return;
-	printf("PROF %s frames=%llu frame_avg_ms=%.3f frame_max_ms=%.3f update_avg_ms=%.3f update_max_ms=%.3f submit_avg_ms=%.3f submit_max_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f"
+	printf("PROF %s players=%d frames=%llu frame_avg_ms=%.3f frame_max_ms=%.3f update_avg_ms=%.3f update_max_ms=%.3f submit_avg_ms=%.3f submit_max_ms=%.3f wait_avg_ms=%.3f wait_max_ms=%.3f"
 		" sim_ships_avg_ms=%.3f sim_ships_max_ms=%.3f"
 		" sim_droid_avg_ms=%.3f sim_droid_max_ms=%.3f"
 		" sim_camera_avg_ms=%.3f sim_camera_max_ms=%.3f"
@@ -1225,7 +1253,7 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" uploads=%llu"
 		" replacements=%llu"
 		" arena_peak=%llu"
-		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu log_sync_vsyncs=%llu log_sync_frames=%llu track_frustum_culled=%llu objects_frustum_culled=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
+		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu log_sync_vsyncs=%llu log_sync_frames=%llu track_frustum_culled=%llu objects_frustum_culled=%llu\n", kind, g.is_attract_mode ? 1 : g.players, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
 		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
 		s->sum.wait_ms / s->frames, s->wait_max,
 		s->sum.sim_ships_ms / s->frames, s->sim_ships_max,
@@ -1391,6 +1419,7 @@ int main(int argc, char *argv[]) {
 	WPAD_Init();
 	PAD_Init();
 	WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
+	WPAD_SetDataFormat(WPAD_CHAN_1, WPAD_FMT_BTNS_ACC_IR);
 	SYS_SetPowerCallback(platform_power_callback);
 	SYS_SetResetCallback(platform_reset_callback);
 	platform_audio_init();

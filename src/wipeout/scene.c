@@ -1,6 +1,7 @@
 #include "../wii_profile.h"
 #include "../utils.h"
 #include "../system.h"
+#include "../platform.h"
 
 #include "object.h"
 #include "scene.h"
@@ -40,7 +41,9 @@ void scene_move_oil_pump(Object *obj);
 void scene_update_aurora_borealis(void);
 
 void scene_load(const char *base_path, float sky_y_offset) {
-	bool multiplayer = false;
+	bool multiplayer = g.players == 2 && !g.is_attract_mode &&
+		platform_asset_exists(get_path(base_path, "sceneMul.cmp")) &&
+		platform_asset_exists(get_path(base_path, "sceneMul.prm"));
 	if (def.circuits[g.circuit].release == GAME_WIPEOUT_64) {
 		// Wipeout 64's skies appear to be rendered in a way reminiscent of
 		// Mario 64, rather than using an actual model. There is a 'sky.prm'
@@ -66,8 +69,8 @@ void scene_load(const char *base_path, float sky_y_offset) {
 		texture_list_t sky_textures = image_get_compressed_textures(get_path(base_path, "sky.cmp"));
 		sky_object = objects_load(get_path(base_path, "sky.prm"), sky_textures);
 
-		texture_list_t scene_textures = image_get_compressed_textures(get_path(base_path, "scene.cmp"));
-		scene_objects = objects_load(get_path(base_path, "scene.prm"), scene_textures);
+		texture_list_t scene_textures = image_get_compressed_textures(get_path(base_path, multiplayer ? "sceneMul.cmp" : "scene.cmp"));
+		scene_objects = objects_load(get_path(base_path, multiplayer ? "sceneMul.prm" : "scene.prm"), scene_textures);
 	}
 	
 	sky_offset = vec3(0, sky_y_offset, 0);

@@ -38,6 +38,8 @@ void map_draw(void *track_ptr, void *ships_ptr, int ship_count, int player_ship_
 
     float ui_scale = (float)screen_size.y / 480.0f;
     if (ui_scale < 0.5f) ui_scale = 0.5f;
+    bool split = g.players == 2 && !g.is_attract_mode;
+    if (split) ui_scale *= 0.5f;
 
     int map_width  = (int)(BASE_MAP_WIDTH * ui_scale);
     int map_height = (int)(BASE_MAP_HEIGHT * ui_scale);
@@ -46,6 +48,10 @@ void map_draw(void *track_ptr, void *ships_ptr, int ship_count, int player_ship_
 
     int screen_x_offset = map_margin; 
     int screen_y_offset = screen_size.y - map_height - map_margin - offset_up;
+    if (split) {
+        screen_x_offset = (screen_size.x - map_width) / 2;
+        screen_y_offset = screen_size.y / 2 - map_height - map_margin;
+    }
 
     render_push_2d(
         vec2i(screen_x_offset, screen_y_offset), 
