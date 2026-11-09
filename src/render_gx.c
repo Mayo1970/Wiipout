@@ -53,6 +53,7 @@ static vec3_t *vertex_positions;
 static rgba_t *vertex_colors;
 static vec2_t *vertex_uvs;
 static uint32_t vertex_base;
+static uint32_t positions_zeroed_end, colors_zeroed_end, uvs_zeroed_end;
 static bool depth_write, depth_test;
 static float depth_offset;
 
@@ -110,10 +111,19 @@ static bool vertex_valid(vec3_t p) {
 
 static void reset_vertex_streams(void) {
 	vertex_base = 0;
+	positions_zeroed_end = colors_zeroed_end = uvs_zeroed_end = 0;
 	GX_SetArray(GX_VA_POS, vertex_positions, sizeof(vec3_t));
 	GX_SetArray(GX_VA_CLR0, vertex_colors, sizeof(rgba_t));
 	GX_SetArray(GX_VA_TEX0, vertex_uvs, sizeof(vec2_t));
 	GX_InvVtxCache();
+}
+
+static void zero_vertex_range(void *stream, uint32_t stride, uint32_t end, uint32_t *zeroed_end) {
+	uint32_t limit = (end * stride + 31) & ~31u;
+	while (*zeroed_end < limit) {
+		DCZeroRange((u8 *)stream + *zeroed_end, 32);
+		*zeroed_end += 32;
+	}
 }
 
 static void flush_vertex_range(void *stream, uint32_t stride, uint32_t base, uint32_t count) {
@@ -429,6 +439,9 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 		batch_texture = texture;
 		gx_texture_t *t = &textures[texture];
 		uint32_t base = vertex_base + tris_len * 3;
+		zero_vertex_range(vertex_positions, sizeof(vec3_t), base + 3, &positions_zeroed_end);
+		zero_vertex_range(vertex_colors, sizeof(rgba_t), base + 3, &colors_zeroed_end);
+		zero_vertex_range(vertex_uvs, sizeof(vec2_t), base + 3, &uvs_zeroed_end);
 		for (uint32_t i = 0; i < 3; i++) {
 			vertex_t *v = &tris.vertices[i];
 			vertex_positions[base + i] = v->pos;
