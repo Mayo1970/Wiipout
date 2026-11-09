@@ -22,7 +22,12 @@ typedef struct {
 
 typedef struct {
 	qoa_desc qoa;
+#ifdef PLATFORM_WII
+	uint32_t generation, read_pos;
+	bool active, header_ready;
+#else
 	FILE *file;
+#endif
 
 	uint32_t track_index;
 	uint32_t first_frame_pos;
@@ -55,6 +60,9 @@ static uint32_t num_sources;
 static sfx_t *nodes;
 static music_decoder_t *music;
 static void (*external_mix_cb)(float *, uint32_t len) = NULL;
+#ifdef PLATFORM_WII
+static uint32_t pending_music_track;
+#endif
 
 void sfx_load(void) {
 	// Init decode buffer for music
@@ -64,7 +72,12 @@ void sfx_load(void) {
 	music->sample_data = mem_bump(channels * QOA_FRAME_LEN * sizeof(short) * 2);
 	music->qoa.channels = channels;
 	music->mode = SFX_MUSIC_RANDOM;
+#ifdef PLATFORM_WII
+	music->active = false;
+	music->header_ready = false;
+#else
 	music->file = NULL;
+#endif
 	music->track_index = -1;
 
 
@@ -233,6 +246,62 @@ void sfx_set_position(sfx_t *sfx, vec3_t pos, vec3_t vel, float volume) {
 
 // Music
 
+#ifdef PLATFORM_WII
+#define SFX_MUSIC_WAIT UINT32_MAX
+uint32_t sfx_music_decode_frame(void) {
+	if (!music->active) return 0;
+	wii_music_status_t status = platform_wii_music_status();
+	if (status.generation != music->generation || status.state == WII_MUSIC_ERROR) {
+		music->active = false;
+		return 0;
+	}
+	if (!music->header_ready) {
+		if (status.loaded < QOA_MIN_FILESIZE) {
+			if (status.state == WII_MUSIC_DONE) music->active = false;
+			return SFX_MUSIC_WAIT;
+		}
+		qoa_desc qoa;
+		uint32_t pos = qoa_decode_header(status.data, QOA_MIN_FILESIZE, &qoa);
+		if (!pos || qoa.channels != music->qoa.channels) {
+			music->active = false;
+			return 0;
+		}
+		music->qoa = qoa;
+		music->read_pos = music->first_frame_pos = pos;
+		music->header_ready = true;
+	}
+	if (status.state == WII_MUSIC_DONE && music->read_pos >= status.total) return 0;
+	uint32_t available = status.loaded - music->read_pos;
+	uint32_t needed = qoa_max_frame_size(&music->qoa);
+	if (status.state == WII_MUSIC_DONE && needed > status.total - music->read_pos)
+		needed = status.total - music->read_pos;
+	if (available < needed) return SFX_MUSIC_WAIT;
+	uint32_t frame_len;
+	uint32_t consumed = qoa_decode_frame(status.data + music->read_pos, needed, &music->qoa, music->sample_data, &frame_len);
+	if (!consumed || !frame_len) {
+		music->active = false;
+		return 0;
+	}
+	music->read_pos += consumed;
+	music->sample_data_pos = 0;
+	music->sample_data_len = frame_len;
+	return frame_len;
+}
+
+void sfx_music_rewind(void) {
+	if (music->header_ready) music->read_pos = music->first_frame_pos;
+	music->sample_data_len = 0;
+	music->sample_data_pos = 0;
+}
+
+void sfx_music_open(char *path) {
+	music->active = true;
+	music->header_ready = false;
+	music->read_pos = music->first_frame_pos = 0;
+	music->sample_data_len = music->sample_data_pos = 0;
+	music->generation = platform_wii_music_request(path);
+}
+#else
 uint32_t sfx_music_decode_frame(void) {
 	if (!music->file) {
 		return 0;
@@ -262,13 +331,6 @@ void sfx_music_open(char *path) {
 	if (!file) {
 		return;
 	}
-#ifdef PLATFORM_WII
-	// SD reads can stall on hardware mid-race, so play the whole track from MEM2.
-	file = platform_wii_music_load(file);
-	if (!file) {
-		return;
-	}
-#endif
 
 	uint8_t header[QOA_MIN_FILESIZE];
 	int read = fread(header, QOA_MIN_FILESIZE, 1, file);
@@ -297,21 +359,40 @@ void sfx_music_open(char *path) {
 	music->sample_data_pos = 0;
 }
 
+#endif
+
+#ifdef PLATFORM_WII
+static void sfx_music_apply(uint32_t index) {
+#else
 void sfx_music_play(uint32_t index) {
 	error_if(index >= len(def.music), "Invalid music index");
+#endif
 	if (index == music->track_index) {
 		sfx_music_rewind();
 		return;
 	}
 
+#ifndef PLATFORM_WII
 	printf("open music track %s\n", def.music[index].name);
+#endif
 
 	music->track_index = index;
 	sfx_music_open(def.music[index].path);
 }
 
+#ifdef PLATFORM_WII
+void sfx_music_play(uint32_t index) {
+	error_if(index >= len(def.music), "Invalid music index");
+	__atomic_store_n(&pending_music_track, index + 1, __ATOMIC_RELEASE);
+}
+#endif
+
 void sfx_music_mode(sfx_music_mode_t mode) {
+#ifdef PLATFORM_WII
+	__atomic_store_n(&music->mode, mode, __ATOMIC_RELAXED);
+#else
 	music->mode = mode;
+#endif
 }
 
 
@@ -321,14 +402,28 @@ void sfx_music_mode(sfx_music_mode_t mode) {
 // Mixing
 
 void sfx_set_external_mix_cb(void (*cb)(float *, uint32_t len)) {
+#ifdef PLATFORM_WII
+	__atomic_store_n(&external_mix_cb, cb, __ATOMIC_RELEASE);
+#else
 	external_mix_cb = cb;
+#endif
 }
 
 void sfx_stereo_mix(float *buffer, uint32_t len) {
+#ifdef PLATFORM_WII
+	uint32_t pending = __atomic_exchange_n(&pending_music_track, 0, __ATOMIC_ACQUIRE);
+	if (pending) sfx_music_apply(pending - 1);
+	void (*mix_cb)(float *, uint32_t) = __atomic_load_n(&external_mix_cb, __ATOMIC_ACQUIRE);
+	if (mix_cb) {
+		mix_cb(buffer, len);
+		return;
+	}
+#else
 	if (external_mix_cb) {
 		external_mix_cb(buffer, len);
 		return;
 	}
+#endif
 
 	// Find currently active nodes: those that play and have volume > 0
 	sfx_t *active_nodes[SFX_MAX_ACTIVE];
@@ -344,6 +439,10 @@ void sfx_stereo_mix(float *buffer, uint32_t len) {
 	}
 
 	uint32_t music_src_index = music->sample_data_pos * music->qoa.channels;
+#ifdef PLATFORM_WII
+	bool music_waiting = false;
+	sfx_music_mode_t music_mode = __atomic_load_n(&music->mode, __ATOMIC_RELAXED);
+#endif
 
 	for (int i = 0; i < len; i += 2) {
 		float left = 0;
@@ -378,6 +477,33 @@ void sfx_stereo_mix(float *buffer, uint32_t len) {
 		left *= save.sfx_volume;
 		right *= save.sfx_volume;
 
+#ifdef PLATFORM_WII
+		// Mix in music
+		if (music_mode != SFX_MUSIC_PAUSED && music->active) {
+			if (music->sample_data_pos == music->sample_data_len && !music_waiting) {
+				uint32_t decoded = sfx_music_decode_frame();
+				music_waiting = decoded == SFX_MUSIC_WAIT;
+				if (!decoded && music->active) {
+					if (music_mode == SFX_MUSIC_RANDOM) {
+						sfx_music_apply(rand_int(0, len(def.music)));
+					}
+					else if (music_mode == SFX_MUSIC_SEQUENTIAL) {
+						sfx_music_apply((music->track_index + 1) % len(def.music));
+					}
+					else if (music_mode == SFX_MUSIC_LOOP) {
+						sfx_music_rewind();
+					}
+					music_waiting = sfx_music_decode_frame() == SFX_MUSIC_WAIT;
+				}
+				music_src_index = 0;
+			}
+			if (music->active && music->sample_data_pos < music->sample_data_len) {
+				left += (music->sample_data[music_src_index++] / 32768.0) * save.music_volume;
+				right += (music->sample_data[music_src_index++] / 32768.0) * save.music_volume;
+				music->sample_data_pos++;
+			}
+		}
+#else
 		// Mix in music
 		if (music->mode != SFX_MUSIC_PAUSED && music->file) {
 			if (music->sample_data_len - music->sample_data_pos == 0) {
@@ -399,6 +525,8 @@ void sfx_stereo_mix(float *buffer, uint32_t len) {
 			right += (music->sample_data[music_src_index++] / 32768.0) * save.music_volume;
 			music->sample_data_pos++;
 		}
+
+#endif
 
 		buffer[i+0] = left;
 		buffer[i+1] = right;

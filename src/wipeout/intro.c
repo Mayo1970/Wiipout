@@ -61,10 +61,15 @@ void intro_init(void) {
 	}
 	texture = render_texture_create(w, h, frame_buffer);
 
+#ifndef PLATFORM_WII
 	sfx_set_external_mix_cb(audio_mix);
+#endif
 	audio_buffer = mem_bump(INTRO_AUDIO_BUFFER_LEN * sizeof(float) * 2);
 	audio_buffer_read_pos = 0;
 	audio_buffer_write_pos = 0;
+#ifdef PLATFORM_WII
+	sfx_set_external_mix_cb(audio_mix);
+#endif
 }
 
 static void intro_end(void) {
@@ -86,15 +91,28 @@ void intro_update(void) {
 
 static void audio_cb(plm_t *plm, plm_samples_t *samples, void *user) {
 	int len = samples->count * 2;
+#ifdef PLATFORM_WII
+	int write_pos = __atomic_load_n(&audio_buffer_write_pos, __ATOMIC_RELAXED);
+	for (int i = 0; i < len; i++) {
+		audio_buffer[write_pos++ % INTRO_AUDIO_BUFFER_LEN] = samples->interleaved[i];
+	}
+	__atomic_store_n(&audio_buffer_write_pos, write_pos, __ATOMIC_RELEASE);
+#else
 	for (int i = 0; i < len; i++) {
 		audio_buffer[audio_buffer_write_pos % INTRO_AUDIO_BUFFER_LEN] = samples->interleaved[i];
 		audio_buffer_write_pos++;
 	}
+#endif
 }
 
 static void audio_mix(float *samples, uint32_t len) {
 	int i;
+#ifdef PLATFORM_WII
+	int write_pos = __atomic_load_n(&audio_buffer_write_pos, __ATOMIC_ACQUIRE);
+	for (i = 0; i < len && audio_buffer_read_pos < write_pos; i++) {
+#else
 	for (i = 0; i < len && audio_buffer_read_pos < audio_buffer_write_pos; i++) {
+#endif
 		samples[i] = audio_buffer[audio_buffer_read_pos % INTRO_AUDIO_BUFFER_LEN];
 		audio_buffer_read_pos++;
 	}
