@@ -255,7 +255,7 @@ static void platform_reset_callback(u32 irq, void *context) {
 static void platform_smoke_update(void) {
 	smoke_frame++;
 #ifdef WII_SMOKE_INTRO
-	// Time, not frames: the GX loop has no vsync wait, so frame counts say nothing about duration.
+	// Use elapsed time so the timeout is independent of refresh rate and stalls.
 	if (smoke_intro_seen && platform_now() - smoke_intro_start >= 240.0) {
 		printf("SMOKE FAIL: intro timeout\n");
 		platform_wii_log_sync();
@@ -263,7 +263,7 @@ static void platform_smoke_update(void) {
 	}
 #else
 #ifdef WII_SMOKE_FULL
-	// Time, not frames: the GX loop has no vsync wait, so frame counts say nothing about duration.
+	// Use elapsed time so the timeout is independent of refresh rate and stalls.
 	if (platform_now() >= 900.0) {
 		printf("SMOKE FAIL: timeout, intro=%d title=%d menu=%d race=%d lap=%d\n", smoke_full_intro_seen,
 			smoke_full_title_seen, smoke_menu_seen, smoke_race_seen,
@@ -695,7 +695,7 @@ static char diag_text[1024];
 static volatile bool diag_crashed;
 
 static const char *diag_phase_names[] = {
-	"none", "input", "update", "flush wait", "texture wait", "frame copy", "frame wait", "frame flip", "audio",
+	"none", "input", "update", "flush wait", "texture wait", "frame copy", "frame wait", "frame flip", "vsync", "audio",
 };
 
 static bool diag_ram(u32 p) {
@@ -814,8 +814,9 @@ static void diag_frame_done(void) {
 wii_profile_frame_t wii_profile_frame;
 typedef struct {
 	wii_profile_frame_t sum, worst;
-	uint64_t frames;
+	uint64_t frames, missed_vsyncs, missed_frames;
 	double frame_ms, frame_max, update_max, submit_max, wait_max;
+	double vsync_wait_max, work_ms, work_max;
 	double sim_rumble_max, sim_particles_max, sim_scene_max, sim_map_max, sim_pickups_max;
 	double sim_ships_max, sim_droid_max, sim_camera_max, sim_weapons_max, sim_other_max, draw_scene_max, draw_track_max, draw_ships_max, draw_fx_max, draw_2d_max, push_max;
 } profile_stats_t;
@@ -829,6 +830,13 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 	}
 	s->frames++;
 	s->frame_ms += frame_ms;
+	double work_ms = frame_ms - wii_profile_frame.vsync_wait_ms;
+	s->work_ms += work_ms;
+	if (s->work_max < work_ms) s->work_max = work_ms;
+	s->sum.vsync_wait_ms += wii_profile_frame.vsync_wait_ms;
+	if (s->vsync_wait_max < wii_profile_frame.vsync_wait_ms) s->vsync_wait_max = wii_profile_frame.vsync_wait_ms;
+	s->missed_vsyncs += wii_profile_frame.missed;
+	s->missed_frames += wii_profile_frame.missed > 0;
 	s->sum.update_ms += wii_profile_frame.update_ms;
 	if (s->update_max < wii_profile_frame.update_ms) s->update_max = wii_profile_frame.update_ms;
 	s->sum.submit_ms += wii_profile_frame.submit_ms;
@@ -933,7 +941,8 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" particles=%llu"
 		" uploads=%llu"
 		" replacements=%llu"
-		" arena_peak=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
+		" arena_peak=%llu"
+		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
 		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
 		s->sum.wait_ms / s->frames, s->wait_max,
 		s->sum.sim_ships_ms / s->frames, s->sim_ships_max,
@@ -974,7 +983,9 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)s->sum.particles,
 		(unsigned long long)s->sum.uploads,
 		(unsigned long long)s->sum.replacements,
-		(unsigned long long)s->sum.arena_peak);
+		(unsigned long long)s->sum.arena_peak,
+		s->sum.vsync_wait_ms / s->frames, s->vsync_wait_max, s->work_ms / s->frames, s->work_max,
+		(unsigned long long)s->missed_vsyncs, (unsigned long long)s->missed_frames);
 }
 
 static void profile_print_worst(const char *kind, const profile_stats_t *s) {
@@ -988,7 +999,8 @@ static void profile_print_worst(const char *kind, const profile_stats_t *s) {
 		" draws=%llu tris=%llu flush_texture=%llu flush_model=%llu flush_state=%llu flush_full=%llu"
 		" flush_end=%llu flush_other=%llu pushes=%llu dropped=%llu track_total=%llu track_drawn=%llu"
 		" track_far=%llu faces=%llu objects_total=%llu objects_drawn=%llu ships=%llu particles=%llu"
-		" uploads=%llu replacements=%llu arena_waits=%llu arena_peak=%llu\n",
+		" uploads=%llu replacements=%llu arena_waits=%llu arena_peak=%llu"
+		" vsync_wait_ms=%.3f retraces=%u missed=%u\n",
 		kind, s->frame_max, f->update_ms, f->submit_ms, f->wait_ms,
 		f->sim_ships_ms, f->sim_droid_ms, f->sim_camera_ms, f->sim_weapons_ms,
 		f->sim_rumble_ms, f->sim_particles_ms, f->sim_scene_ms, f->sim_map_ms,
@@ -1004,10 +1016,36 @@ static void profile_print_worst(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)f->objects_total, (unsigned long long)f->objects_drawn,
 		(unsigned long long)f->ships, (unsigned long long)f->particles,
 		(unsigned long long)f->uploads, (unsigned long long)f->replacements,
-		(unsigned long long)f->arena_waits, (unsigned long long)f->arena_peak);
+		(unsigned long long)f->arena_waits, (unsigned long long)f->arena_peak,
+		f->vsync_wait_ms, (unsigned int)f->retraces, (unsigned int)f->missed);
+}
+
+static volatile u32 profile_retrace;
+static VIRetraceCallback profile_previous_retrace_callback;
+
+static void profile_retrace_callback(u32 retrace) {
+	profile_retrace++;
+	if (profile_previous_retrace_callback) profile_previous_retrace_callback(retrace);
+}
+
+void wii_profile_flip(void) {
+	static u32 previous_retrace;
+	static bool have_previous;
+	u32 retrace = profile_retrace;
+	if (have_previous) {
+		wii_profile_frame.retraces = retrace - previous_retrace;
+		wii_profile_frame.missed = wii_profile_frame.retraces > 1 ? wii_profile_frame.retraces - 1 : 0;
+	}
+	previous_retrace = retrace;
+	have_previous = true;
 }
 
 void wii_profile_begin(void) {
+	static bool callback_installed;
+	if (!callback_installed) {
+		profile_previous_retrace_callback = VIDEO_SetPostRetraceCallback(profile_retrace_callback);
+		callback_installed = true;
+	}
 	memset(&wii_profile_frame, 0, sizeof(wii_profile_frame));
 	profile_start = platform_now();
 }

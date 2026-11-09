@@ -333,6 +333,13 @@ void render_frame_end(void) {
 	WII_DIAG_PHASE(WII_PHASE_FRAME_FLIP);
 	VIDEO_SetNextFramebuffer(platform_wii_xfb(back));
 	VIDEO_Flush();
+#ifndef WII_NO_VSYNC
+	WII_DIAG_PHASE(WII_PHASE_VSYNC);
+	PROF_TIME_START(vsync_wait_start);
+	VIDEO_WaitVSync();
+	PROF_TIME_ADD(vsync_wait_ms, vsync_wait_start);
+#endif
+	PROF_FLIP();
 	WII_DIAG_PHASE(WII_PHASE_UPDATE);
 	back ^= 1;
 	end_stats = running_stats;
