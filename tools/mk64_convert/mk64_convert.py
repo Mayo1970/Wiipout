@@ -33,7 +33,9 @@ def read_source(root, course):
         vertices.append(((x, y, z), ((r & ~3) | (flag & 3), (g & ~3) | ((flag >> 2) & 3), b), tuple(map(int, m.group(4, 5)))))
     if not vertices:
         raise ValueError('no CourseVtx entries found')
-    arrays = {m.group(1): list(COMMAND.finditer(m.group(2))) for m in ARRAY.finditer((folder / 'course_displaylists.inc.c').read_text())}
+    data = (folder / 'course_data.c').read_text()
+    source = data + '\n' + (folder / 'course_displaylists.inc.c').read_text()
+    arrays = {m.group(1): list(COMMAND.finditer(m.group(2))) for m in ARRAY.finditer(source)}
     referenced = {m.group(2).strip() for cmds in arrays.values() for m in cmds if m.group(1) == 'gsSPDisplayList'}
     triangles = []
     seen = set()
@@ -73,15 +75,22 @@ def read_source(root, course):
                     key = (name, cmd.start(), i)
                     if key not in seen:
                         seen.add(key)
-                        triangles.append((tuple(cache[n] for n in indices), state.copy()))
-    for name in list(arrays):
-        if name not in referenced:
+                        triangles.append((tuple(cache[n] for n in indices), dict(state, array=name)))
+    packed = {m.group(1) for m in ARRAY.finditer((folder / 'course_displaylists.inc.c').read_text())}
+    def reaches_packed(name, stack):
+        if name in packed:
+            return True
+        if name not in arrays or name in stack:
+            return False
+        return any(reaches_packed(m.group(2).strip(), stack | {name}) for m in arrays[name] if m.group(1) == 'gsSPDisplayList')
+    for name in arrays:
+        if name not in referenced and reaches_packed(name, set()):
             walk(name, {}, [None]*32, set())
     for name in arrays:
-        walk(name, {}, [None]*32, set())
+        if name in packed:
+            walk(name, {}, [None]*32, set())
     if not triangles:
         raise ValueError('no display-list triangles found')
-    data = (folder / 'course_data.c').read_text()
     table = (root / 'assets/course_metadata/gCoursePathTable.inc.c').read_text()
     prefix = 'd_course_' + course + '_track_path'
     entry = re.search(r'\{\s*' + re.escape(prefix) + r'\s*,([^}]*)\}', table)
@@ -429,11 +438,17 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
     tims, paths, dims, missing = [], {}, {}, set()
     groups = defaultdict(list)
     capped = 0
+    untextured = defaultdict(int)
+    untextured_arrays = defaultdict(int)
     for tri, state in triangles:
         symbol = state.get('image')
         path = mapping.get(symbol)
         if symbol and (not path or not path.exists()): missing.add(symbol)
         tex = None
+        reason = ('textures disabled by option' if no_textures else
+                  'no SetTextureImage seen' if not symbol else
+                  'texture disabled' if not state.get('enabled', True) else
+                  'symbol unmapped' if not path or not path.exists() else None)
         if not no_textures and path and path.exists() and state.get('enabled', True):
             modes = state.get('modes', ('G_TX_WRAP', 'G_TX_WRAP'))
             mirror = tuple('G_TX_MIRROR' in mode and 'G_TX_CLAMP' not in mode for mode in modes)
@@ -466,6 +481,7 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
                     ranges.append(range(lo, max(lo,hi)+1))
             if len(ranges[0])*len(ranges[1]) > 256:
                 capped += 1
+                reason = 'capped'
                 tex = None
             else:
                 for u in ranges[0]:
@@ -504,9 +520,14 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
             ab = [pos[1][k]-pos[0][k] for k in range(3)]
             ac = [pos[2][k]-pos[0][k] for k in range(3)]
             if all(ab[(k+1)%3]*ac[(k+2)%3] == ab[(k+2)%3]*ac[(k+1)%3] for k in range(3)): continue
-            cols = [tuple(max(0,min(255,round(x))) for x in p[3:6]) for p in pp]
+            # The renderer doubles texture modulation; untextured faces use a half-white texture.
+            divisor = 2 if tex is not None else 1
+            cols = [tuple(max(0,min(255,round(x/divisor))) for x in p[3:6]) for p in pp]
             center = tuple(sum(p[k] for p in pos)//3//12000 for k in range(3))
             groups[center].append((pos,cols,tex,uv))
+            if tex is None:
+                untextured[reason] += 1
+                untextured_arrays[state['array']] += 1
     objects = []
     count = 0
     for group in groups.values():
@@ -522,7 +543,7 @@ def scenery(vertices, triangles, scale, mapping, no_textures):
                 primitives.append((ids, colors) if tex is None else (ids, colors, (tex, uv)))
             objects.append(object_bytes(f'mesh{len(objects)}', positions, primitives))
             count += len(primitives)
-    return b''.join(objects), len(objects), tims, count, capped, sorted(missing)
+    return b''.join(objects), len(objects), tims, count, capped, sorted(missing), untextured, untextured_arrays
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -543,7 +564,7 @@ def main():
         branch_points.append((start, end, branch))
         print(f'  branch {start}->{end}: {len(branch)} sections')
     trv, trf, trs = road(points, args.scale, branch_points)
-    scene, objects, tims, after, capped, missing = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures)
+    scene, objects, tims, after, capped, missing, untextured, untextured_arrays = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures)
     skyverts = [(-12000, 0, -12000), (12000, 0, -12000), (12000, 0, 12000), (-12000, 0, 12000), (0, -12000, 0)]
     skytris = [((i, (i+1)%4, 4), [(110, 160, 220), (110, 160, 220), (30, 60, 150)]) for i in range(4)]
     files = {'track.trv': trv, 'track.trf': trf, 'track.trs': trs, 'track.trc': bytes([1])*(len(trf)//20), 'library.ttf': bytes(42), 'library.cmp': cmp_file(), 'scene.prm': scene, 'scene.cmp': cmp_file(tims if tims else None), 'sky.prm': object_bytes('sky', skyverts, skytris), 'sky.cmp': cmp_file()}
@@ -553,6 +574,8 @@ def main():
         (out / name).write_bytes(data)
     print(f'{args.course}: {len(trs)//156} sections, {len(trf)//20} faces, {len(triangles)} scene triangles, {objects} scene objects, {misses} height fallbacks')
     print(f'  clipping: {len(triangles)} -> {after} triangles, {capped} capped, {len(tims)} textures')
+    print(f'  untextured: {sum(untextured.values())} (' + ', '.join(f'{reason}: {untextured[reason]}' for reason in ('no SetTextureImage seen', 'texture disabled', 'symbol unmapped', 'capped', 'textures disabled by option') if untextured[reason]) + ')')
+    print('  untextured arrays: ' + (', '.join(f'{name}: {count}' for name, count in sorted(untextured_arrays.items(), key=lambda item: (-item[1], item[0]))[:5]) or 'none'))
     print('  unmapped: ' + (', '.join(missing) if missing else 'none'))
     for name, data in files.items():
         print(f'  {name}: {len(data)} bytes')
