@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <ogc/video.h>
 
+void render_gx_set_2d_scale(float scale);
+float render_gx_get_2d_scale(void);
+
 GXRModeObj *platform_wii_video_mode(void);
 bool platform_wii_widescreen(void);
 void *platform_wii_xfb(int index);

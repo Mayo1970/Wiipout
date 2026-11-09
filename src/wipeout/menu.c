@@ -1,6 +1,12 @@
 #include "../system.h"
 #include "../input.h"
 #include "../utils.h"
+#ifdef PLATFORM_WII
+#include "../platform_wii.h"
+#ifndef WII_MENU_2D_SCALE
+#define WII_MENU_2D_SCALE 0.9f
+#endif
+#endif
 
 #include "game.h"
 #include "menu.h"
@@ -75,7 +81,11 @@ void menu_page_add_toggle(menu_page_t *page, int data, char *text, const char **
 }
 
 
+#ifdef PLATFORM_WII
+static void menu_update_page(menu_t *menu) {
+#else
 void menu_update(menu_t *menu) {
+#endif
 	render_set_view_2d();
 	
 	error_if(menu->index < 0, "Attempt to update menu without a page");
@@ -236,3 +246,11 @@ void menu_update(menu_t *menu) {
 		}
 	}
 }
+
+#ifdef PLATFORM_WII
+void menu_update(menu_t *menu) {
+	render_gx_set_2d_scale(WII_MENU_2D_SCALE);
+	menu_update_page(menu);
+	render_gx_set_2d_scale(1.0f);
+}
+#endif

@@ -199,6 +199,12 @@ static void page_options_controls_set_init(menu_t *menu, int data) {
 static void page_options_control_draw(menu_t *menu, int data) {
 	menu_page_t *page = &menu->pages[menu->index];
 
+#ifdef PLATFORM_WII
+	int right = page->items_pos.x + page->block_width;
+	int line_y = page->items_pos.y;
+	vec2i_t right_head_pos = vec2i(right - ui_text_width("JOYSTICK", UI_SIZE_8), page->title_pos.y + 2);
+	ui_draw_text("JOYSTICK", ui_scaled_pos(page->items_anchor, right_head_pos), UI_SIZE_8, UI_COLOR_DEFAULT);
+#else
 	int left = page->items_pos.x + page->block_width - 100;
 	int right = page->items_pos.x + page->block_width;
 	int line_y = page->items_pos.y - 20;
@@ -209,6 +215,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 	vec2i_t right_head_pos = vec2i(right - ui_text_width("JOYSTICK", UI_SIZE_8), line_y);
 	ui_draw_text("JOYSTICK", ui_scaled_pos(page->items_anchor, right_head_pos), UI_SIZE_8, UI_COLOR_DEFAULT);
 	line_y += 20;
+#endif
 
 	for (int action = 0; action < NUM_GAME_ACTIONS; action++) {
 		rgba_t text_color = UI_COLOR_DEFAULT;
@@ -216,6 +223,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 			text_color = UI_COLOR_ACCENT;
 		}
 
+#ifndef PLATFORM_WII
 		if (save.buttons[action][0] != INPUT_INVALID) {
 			const char *name = input_button_to_name(save.buttons[action][0]);
 			if (!name) {
@@ -224,6 +232,7 @@ static void page_options_control_draw(menu_t *menu, int data) {
 			vec2i_t pos = vec2i(left - ui_text_width(name, UI_SIZE_8), line_y);
 			ui_draw_text(name, ui_scaled_pos(page->items_anchor, pos), UI_SIZE_8, text_color);
 		}
+#endif
 		if (save.buttons[action][1] != INPUT_INVALID) {
 			const char *name = input_button_to_name(save.buttons[action][1]);
 			if (!name) {
@@ -264,9 +273,17 @@ static const char *modern_camera[] = {"CLASSIC", "MODERN"};
 static void page_options_controls_init(menu_t *menu) {
 	menu_page_t *page = menu_push(menu, "CONTROLS", page_options_control_draw);
 	flags_set(page->layout_flags, MENU_VERTICAL | MENU_FIXED);
+#ifdef PLATFORM_WII
+	page->title_pos = vec2i(-160, -104);
+#else
 	page->title_pos = vec2i(-160, -100);
+#endif
 	page->title_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
+#ifdef PLATFORM_WII
+	page->items_pos = vec2i(-160, -84);
+#else
 	page->items_pos = vec2i(-160, -50);
+#endif
 	page->block_width = 320;
 	page->items_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
 
@@ -287,8 +304,15 @@ static void page_options_controls_init(menu_t *menu) {
 
 	menu_page_add_toggle(page, save.vibration_toggle, "VIBRATION", vibration_options, len(vibration_options), toggle_vibration_toggle);
 	menu_page_add_toggle(page, save.modern_camera, "LOOK STYLE", modern_camera, len(modern_camera), toggle_modern_camera);
+#ifdef PLATFORM_WII
+	// Full labels plus MODERATE are wider than the 320 block and overlap.
+	menu_page_add_toggle(page, save.analog_response - 1, "L ANALOG RESPONSE", analog_response, len(analog_response), toggle_analog_response);
+	menu_page_add_toggle(page, save.r_analog_response - 1, "R ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);
+#else
 	menu_page_add_toggle(page, save.analog_response - 1, "LEFT ANALOG RESPONSE", analog_response, len(analog_response), toggle_analog_response);
-	menu_page_add_toggle(page, save.r_analog_response - 1, "RIGHT ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);}
+	menu_page_add_toggle(page, save.r_analog_response - 1, "RIGHT ANALOG RESPONSE", r_analog_response, len(r_analog_response), toggle_r_analog_response);
+#endif
+}
 
 // -----------------------------------------------------------------------------
 // Options Video
@@ -348,6 +372,11 @@ static void page_options_video_init(menu_t *menu) {
 	page->block_width = 320;
 	page->items_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
 
+#ifdef PLATFORM_WII
+	menu_page_add_toggle(page, save.screen_shake * 2, "SCREEN SHAKE", opts_screen_shake, len(opts_screen_shake), toggle_screen_shake);
+	menu_page_add_toggle(page, save.draw_stats, "DRAW STATS", opts_draw_stats, len(opts_draw_stats), toggle_draw_stats);
+	(void)toggle_fullscreen; (void)toggle_internal_roll; (void)toggle_ui_scale; (void)toggle_res; (void)toggle_post;
+#else
 	#ifndef __EMSCRIPTEN__
 		menu_page_add_toggle(page, save.fullscreen, "FULLSCREEN", opts_off_on, len(opts_off_on), toggle_fullscreen);
 	#endif
@@ -357,6 +386,7 @@ static void page_options_video_init(menu_t *menu) {
 	menu_page_add_toggle(page, save.draw_stats, "DRAW STATS", opts_draw_stats, len(opts_draw_stats), toggle_draw_stats);
 	menu_page_add_toggle(page, save.screen_res, "SCREEN RESOLUTION", opts_res, len(opts_res), toggle_res);
 	menu_page_add_toggle(page, save.post_effect, "POST PROCESSING", opts_post, len(opts_post), toggle_post);
+#endif
 }
 
 // -----------------------------------------------------------------------------

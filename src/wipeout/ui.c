@@ -1,8 +1,15 @@
 #include "../render.h"
 #include "../utils.h"
+#ifdef PLATFORM_WII
+#include "../platform_wii.h"
+#endif
 
 #include "ui.h"
 #include "image.h"
+
+#ifndef WII_UI_SAFE_PERCENT
+#define WII_UI_SAFE_PERCENT 5
+#endif
 
 typedef struct {
 	vec2i_t offset;
@@ -91,22 +98,42 @@ vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset) {
 
 	if (flags_is(anchor, UI_POS_LEFT)) {
 		pos.x = offset.x * ui_scale;
+#ifdef PLATFORM_WII
+		if (render_gx_get_2d_scale() >= 1.0f) {
+			pos.x += screen_size.x * WII_UI_SAFE_PERCENT / 100;
+		}
+#endif
 	}
 	else if (flags_is(anchor, UI_POS_CENTER)) {
 		pos.x = (screen_size.x >> 1) + offset.x * ui_scale;
 	}
 	else if (flags_is(anchor, UI_POS_RIGHT)) {
 		pos.x = screen_size.x + offset.x * ui_scale;
+#ifdef PLATFORM_WII
+		if (render_gx_get_2d_scale() >= 1.0f) {
+			pos.x -= screen_size.x * WII_UI_SAFE_PERCENT / 100;
+		}
+#endif
 	}
 
 	if (flags_is(anchor, UI_POS_TOP)) {
 		pos.y = offset.y * ui_scale;
+#ifdef PLATFORM_WII
+		if (render_gx_get_2d_scale() >= 1.0f) {
+			pos.y += screen_size.y * WII_UI_SAFE_PERCENT / 100;
+		}
+#endif
 	}
 	else if (flags_is(anchor, UI_POS_MIDDLE)) {
 		pos.y = (screen_size.y >> 1) + offset.y * ui_scale;
 	}
 	else if (flags_is(anchor, UI_POS_BOTTOM)) {
 		pos.y = screen_size.y + offset.y * ui_scale;
+#ifdef PLATFORM_WII
+		if (render_gx_get_2d_scale() >= 1.0f) {
+			pos.y -= screen_size.y * WII_UI_SAFE_PERCENT / 100;
+		}
+#endif
 	}
 
 	return pos;
