@@ -350,6 +350,8 @@ static track_face_class_t track_face_classify(track_face_t *face, vec3_t cam_pos
 }
 
 void track_draw(camera_t *camera) {	
+	bool mk64 = def.circuits[g.circuit].release == GAME_MK64;
+	if (mk64) render_set_depth_offset(-32.0);
 	render_set_model_mat(&mat4_identity());
 
 	// Calculate the camera forward vector, so we can cull everything that's
@@ -431,6 +433,7 @@ void track_draw(camera_t *camera) {
 			render_push_tris(face->tris[1], texture);
 		}
 	}
+	if (mk64) render_set_depth_offset(0.0);
 }
 
 void track_cycle_pickups(void) {
