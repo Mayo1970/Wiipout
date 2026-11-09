@@ -95,14 +95,13 @@ def check(folder):
     ttf = (folder/'library.ttf').read_bytes()
     assert len(trv)%16 == len(trf)%20 == len(trs)%156 == 0
     nv, nf, ns = len(trv)//16, len(trf)//20, len(trs)//156
-    assert nv and nf and ns and len(trc) == nf and all(x in (0, 1) for x in trc)
-    assert len(ttf) == 84
-    textures = compressed(folder/'library.cmp')
-    assert textures == [(32, 32), (32, 32)]
-    assert struct.unpack('>42h', ttf) == (0,)*21 + (1,)*21
+    assert nv and nf and ns and len(trc) == nf and all(x == 1 for x in trc)
+    assert len(ttf) == 42
+    texcount = len(compressed(folder/'library.cmp'))
+    assert all(0 <= i < texcount for i in struct.unpack('>21h', ttf))
     for face in struct.iter_unpack('>hhhhhhhBBI', trf):
         assert all(0 <= i < nv for i in face[:4])
-        assert face[7] in (0, 1)
+        assert face[7] == 0
     links = []
     for i in range(ns):
         off = i*156
@@ -113,12 +112,7 @@ def check(folder):
         assert -1 <= junction < ns and 0 <= prev < ns and 0 <= nxt < ns and version == 8
         assert 0 <= start and start+count <= nf and count == 4
         flags = [trf[(start+j)*20+15] for j in range(count)]
-        assert flags[0] == flags[3] == 0
-        assert flags[1] in (1, 3) and flags[2] in (1, 9)
-        for j in range(4):
-            pickup = bool(flags[j] & 10)
-            assert trc[start+j] == (0 if pickup else 1)
-            assert trf[(start+j)*20+14] == (1 if pickup else 0)
+        assert flags == [0, 1, 1, 0]
         links.append((junction, prev, nxt, section_flags))
     main = []
     seen = set()

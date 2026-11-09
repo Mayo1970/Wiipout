@@ -25,9 +25,9 @@ Do not commit converted data.
 
 ## What the converter writes
 
-- **Road strip** (`track.*`): sections sampled along the MK64 track path, with a fixed width. Faces are collision-only (`track.trc`) except for visible procedural weapon pickup pads mapped from MK64 item boxes. Physics, AI and lap logic use them. The road height comes from the course mesh under each sample.
+- **Road strip** (`track.*`): sections sampled along the MK64 track path, with a fixed width. All faces are collision-only (`track.trc`), so they are not drawn. Physics, AI and lap logic use them. The road height comes from the course mesh under each sample.
 - **Junctions**: alternate MK64 paths (Yoshi Valley, Koopa Troopa Beach) become junction branches. The converter skips branches that overlap another branch and prints the reason.
-- **Scenery** (`scene.*`): the original course mesh, with the extracted textures; duplicate position-and-winding triangles are resolved before clipping. The game draws MK64 scenery textures with GX repeat. The converter clips triangles only where their UVs leave the 8-bit PRM range, and bakes mirrored axes into the texture.
+- **Scenery** (`scene.*`): the original course mesh, with the extracted textures. The game draws MK64 scenery textures with GX repeat. The converter clips triangles only where their UVs leave the 8-bit PRM range, and bakes mirrored axes into the texture.
 - **Sky** (`sky.*`): a simple gradient dome.
 
 ## Limits
