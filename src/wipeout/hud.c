@@ -9,6 +9,13 @@
 #include "game.h"
 #include "ui.h"
 
+// Unanchored top-left HUD; on Wii it goes through the anchor so the TV safe margin applies.
+#ifdef PLATFORM_WII
+#define HUD_TOP_LEFT(v) ui_scaled_pos(UI_POS_TOP | UI_POS_LEFT, v)
+#else
+#define HUD_TOP_LEFT(v) ui_scaled(v)
+#endif
+
 static texture_list_t weapon_icon_textures;
 static uint16_t target_reticle;
 
@@ -188,11 +195,11 @@ void hud_draw(ship_t *ship) {
 
 	// Current Lap
 	int display_lap = max(0, ship->lap + 1);
-	ui_draw_text("LAP", ui_scaled(vec2i(15, 8)), UI_SIZE_8, UI_COLOR_ACCENT); 
-	ui_draw_number(display_lap, ui_scaled(vec2i(10, 19)), UI_SIZE_16, UI_COLOR_DEFAULT); 
+	ui_draw_text("LAP", HUD_TOP_LEFT(vec2i(15, 8)), UI_SIZE_8, UI_COLOR_ACCENT); 
+	ui_draw_number(display_lap, HUD_TOP_LEFT(vec2i(10, 19)), UI_SIZE_16, UI_COLOR_DEFAULT); 
 	int width = ui_char_width('0' + display_lap, UI_SIZE_16);
-	ui_draw_text("OF", ui_scaled(vec2i((10 + width), 27)), UI_SIZE_8, UI_COLOR_ACCENT);
-	ui_draw_number(NUM_LAPS, ui_scaled(vec2i((32 + width), 19)), UI_SIZE_16, UI_COLOR_DEFAULT);
+	ui_draw_text("OF", HUD_TOP_LEFT(vec2i((10 + width), 27)), UI_SIZE_8, UI_COLOR_ACCENT);
+	ui_draw_number(NUM_LAPS, HUD_TOP_LEFT(vec2i((32 + width), 19)), UI_SIZE_16, UI_COLOR_DEFAULT);
 
 	// Race Position
 	if (g.race_type != RACE_TYPE_TIME_TRIAL) {
@@ -203,17 +210,17 @@ void hud_draw(ship_t *ship) {
 	// Framerate/draw stats
 	switch (save.draw_stats) {
 	case DRAW_STATS_FPS:
-		ui_draw_text("FPS", ui_scaled(vec2i(16, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
-		ui_draw_number((int)(g.frame_rate), ui_scaled(vec2i(16, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
+		ui_draw_text("FPS", HUD_TOP_LEFT(vec2i(16, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
+		ui_draw_number((int)(g.frame_rate), HUD_TOP_LEFT(vec2i(16, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
 		break;
 	case DRAW_STATS_DEBUG: {
-		ui_draw_text("TRIS", ui_scaled(vec2i(16, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
-		ui_draw_text("CALLS", ui_scaled(vec2i(80, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
-		ui_draw_text("MS", ui_scaled(vec2i(144, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
+		ui_draw_text("TRIS", HUD_TOP_LEFT(vec2i(16, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
+		ui_draw_text("CALLS", HUD_TOP_LEFT(vec2i(80, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
+		ui_draw_text("MS", HUD_TOP_LEFT(vec2i(144, 78)), UI_SIZE_8, UI_COLOR_ACCENT);
 		const render_stats_t *stats = render_frame_get_stats();
-		ui_draw_number((int)(stats->num_tris), ui_scaled(vec2i(16, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
-		ui_draw_number((int)(stats->num_draw_calls), ui_scaled(vec2i(80, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
-		ui_draw_number((int)(g.frame_time * 1000), ui_scaled(vec2i(144, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
+		ui_draw_number((int)(stats->num_tris), HUD_TOP_LEFT(vec2i(16, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
+		ui_draw_number((int)(stats->num_draw_calls), HUD_TOP_LEFT(vec2i(80, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
+		ui_draw_number((int)(g.frame_time * 1000), HUD_TOP_LEFT(vec2i(144, 90)), UI_SIZE_8, UI_COLOR_DEFAULT);
 		break;
 	}
 	default:
@@ -221,8 +228,8 @@ void hud_draw(ship_t *ship) {
 	}
 
 	// Lap Record
-	ui_draw_text("LAP RECORD", ui_scaled(vec2i(15, 43)), UI_SIZE_8, UI_COLOR_ACCENT);
-	ui_draw_time(save.highscores[g.race_class][g.circuit][g.highscore_tab].lap_record, ui_scaled(vec2i(15, 55)), UI_SIZE_8, UI_COLOR_DEFAULT);
+	ui_draw_text("LAP RECORD", HUD_TOP_LEFT(vec2i(15, 43)), UI_SIZE_8, UI_COLOR_ACCENT);
+	ui_draw_time(save.highscores[g.race_class][g.circuit][g.highscore_tab].lap_record, HUD_TOP_LEFT(vec2i(15, 55)), UI_SIZE_8, UI_COLOR_DEFAULT);
 
 	// Wrong way
 	if (flags_not(ship->flags, SHIP_DIRECTION_FORWARD)) {
