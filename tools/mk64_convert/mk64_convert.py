@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Convert n64decomp MK64 course geometry into Wipeout's PSX asset formats."""
 import argparse
 import ast
@@ -82,20 +82,30 @@ def read_source(root, course):
     if not triangles:
         raise ValueError('no display-list triangles found')
     data = (folder / 'course_data.c').read_text()
-    match = re.search(r'\bTrackPathPoint\s+d_course_' + re.escape(course) + r'_track_path\s*\[\s*\]\s*=\s*\{(.*?)\};', data, re.S)
-    if not match:
-        raise ValueError('main track path not found')
-    points = []
-    for m in POINT.finditer(match.group(1)):
-        p = tuple(map(int, m.groups()))
-        if p[0] == -32768:
-            break
-        points.append(p[:3])
-    else:
-        raise ValueError('track path has no terminator')
-    if len(points) < 3:
-        raise ValueError('track path has fewer than three points')
-    return vertices, triangles, points
+    table = (root / 'assets/course_metadata/gCoursePathTable.inc.c').read_text()
+    prefix = 'd_course_' + course + '_track_path'
+    entry = re.search(r'\{\s*' + re.escape(prefix) + r'\s*,([^}]*)\}', table)
+    if not entry:
+        raise ValueError('course path table entry not found')
+    names = [prefix] + re.findall(r'\b' + re.escape(prefix) + r'_\d+\b', entry.group(1))
+    paths = []
+    for name in names:
+        match = re.search(r'\bTrackPathPoint\s+' + re.escape(name) + r'\s*\[\s*\]\s*=\s*\{(.*?)\};', data, re.S)
+        if not match:
+            raise ValueError(f'track path not found: {name}')
+        points = []
+        for m in POINT.finditer(match.group(1)):
+            point = tuple(map(int, m.groups()))
+            if point[0] == -32768:
+                break
+            points.append(point[:3])
+        else:
+            raise ValueError(f'track path has no terminator: {name}')
+        if len(points) < 3:
+            raise ValueError(f'track path has fewer than three points: {name}')
+        paths.append(points)
+    return vertices, triangles, paths
+
 
 
 def samples(points, scale):
@@ -157,11 +167,100 @@ def normal(a, b, c):
     return tuple(round(x * 4096 / length) for x in n)
 
 
-def road(points, scale):
+def distance_to_segment(p, a, b):
+    v = tuple(b[k] - a[k] for k in range(3))
+    w = tuple(p[k] - a[k] for k in range(3))
+    t = max(0, min(1, sum(x*y for x, y in zip(v, w)) / (sum(x*x for x in v) or 1)))
+    return math.sqrt(sum((w[k] - t*v[k])**2 for k in range(3)))
+
+
+def branches(paths, main, scale):
+    if len(paths) == 1:
+        return []
+    threshold = ROAD_WIDTH / scale / 2
+    segments = list(zip(paths[0], paths[0][1:] + paths[0][:1]))
+    result = []
+    occupied = set()
+    intervals = []
+    for path_index, path in enumerate(paths[1:], 2):
+        distances = [min(distance_to_segment(p, a, b) for a, b in segments) for p in path]
+        high = [d > threshold for d in distances]
+        low = [d > threshold * 0.6 for d in distances]
+        runs = []
+        for i in range(len(path)):
+            if low[i] and not low[i-1]:
+                run = []
+                j = i
+                while low[j] and len(run) < len(path):
+                    run.append(j)
+                    j = (j+1) % len(path)
+                if any(high[k] for k in run):
+                    runs.append(run)
+        if all(low):
+            print(f'  path {path_index}: skipped: never rejoins main path')
+        for run in runs:
+            before, after = (run[0]-1) % len(path), (run[-1]+1) % len(path)
+            stretch = [path[before]] + [path[k] for k in run] + [path[after]]
+            length = sum(math.dist(a, b) for a, b in zip(stretch, stretch[1:]))
+            if length * scale < SPACING * 3:
+                print(f'  path {path_index}: skipped tiny divergence')
+                continue
+            start = min(range(len(main)), key=lambda i: math.dist(main[i], stretch[0]))
+            end = min(range(len(main)), key=lambda i: math.dist(main[i], stretch[-1]))
+            span = (end-start) % len(main)
+            if span < 3 or span > len(main)//2 or start == 0 or end == 0:
+                print(f'  path {path_index}: skipped divergence {start}->{end}: unsupported main-loop span')
+                continue
+            if any(max(max(min(distance_to_segment(p, a, b) for a, b in zip(old, old[1:])) for p in stretch),
+                       max(min(distance_to_segment(p, a, b) for a, b in zip(stretch, stretch[1:])) for p in old)) < threshold * 0.6 for _, _, old in result):
+                print(f'  path {path_index}: skipped duplicate divergence {start}->{end}')
+                continue
+            used = {(start-1) % len(main), start, (end-1) % len(main), end}
+            interval = {(start+i) % len(main) for i in range(span+1)}
+            if used & occupied or any(interval & old_interval for old_interval in intervals):
+                print(f'  path {path_index}: skipped divergence {start}->{end}: overlapping or nested branch')
+                continue
+            result.append((start, end, stretch))
+            occupied |= used
+            intervals.append(interval)
+    return result
+
+
+def open_samples(points, scale):
+    segments = [(a, b, math.dist(a, b)) for a, b in zip(points, points[1:])]
+    total = sum(s[2] for s in segments)
+    count = max(3, round(total * scale / SPACING))
+    result = []
+    j = 0
+    elapsed = 0
+    for i in range(1, count):
+        target = total * i / count
+        while j < len(segments)-1 and elapsed + segments[j][2] <= target:
+            elapsed += segments[j][2]
+            j += 1
+        a, b, length = segments[j]
+        t = (target-elapsed)/length if length else 0
+        result.append(tuple(a[k] + (b[k]-a[k])*t for k in range(3)))
+    return result
+
+
+def road(points, scale, branch_points=()):
     centers = [(x * scale, -y * scale, -z * scale) for x, y, z in points]
+    main_count = len(centers)
+    links = [[-1, (i-1) % main_count, (i+1) % main_count, 0] for i in range(main_count)]
+    for start, end, branch in branch_points:
+        first = len(centers)
+        centers.extend((x * scale, -y * scale, -z * scale) for x, y, z in branch)
+        last = len(centers)-1
+        links.extend([[-1, start if i == first else i-1, end if i == last else i+1,
+                       32 | (16 if i == first else 0) | (8 if i == last else 0)] for i in range(first, last+1)])
+        for i in (start-1, start): links[i][0] = first
+        for i in (end-1, end): links[i][0] = last
+    if len(centers) * 5 > 32767 or len(centers) * 4 > 32767:
+        raise ValueError('track exceeds signed 16-bit vertex/face index limits')
     rows = []
     for i, p in enumerate(centers):
-        prev, nxt = centers[i-1], centers[(i+1) % len(centers)]
+        prev, nxt = centers[links[i][1]], centers[links[i][2]]
         dx, dz = nxt[0]-prev[0], nxt[2]-prev[2]
         length = math.hypot(dx, dz)
         if length < 1e-6:
@@ -175,15 +274,17 @@ def road(points, scale):
     trf = bytearray()
     trs = bytearray()
     for i, row in enumerate(rows):
-        nxt = rows[(i+1) % len(rows)]
+        next_index = links[i][2]
+        nxt = rows[next_index]
         for j in range(4):
-            ids = ((i+1) % len(rows)*5+j+1, (i+1) % len(rows)*5+j, i*5+j, i*5+j+1)
+            ids = (next_index*5+j+1, next_index*5+j, i*5+j, i*5+j+1)
             n = normal(nxt[j+1], nxt[j], row[j])
             trf.extend(struct.pack('>hhhhhhhBBI', *ids, *n, 0, 1 if j in (1, 2) else 0, 0xffffffff))
         section = bytearray(156)
-        struct.pack_into('>iiiiii', section, 0, -1, (i-1) % len(rows), (i+1) % len(rows), *map(round, centers[i]))
+        struct.pack_into('>iiiiii', section, 0, *links[i][:3], *map(round, centers[i]))
         struct.pack_into('>h', section, 24, 8)
         struct.pack_into('>hh', section, 142, i*4, 4)
+        struct.pack_into('>h', section, 150, links[i][3])
         trs.extend(section)
     return trv, bytes(trf), bytes(trs)
 
@@ -433,9 +534,15 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r'[a-z0-9_]+', args.course) or not math.isfinite(args.scale) or args.scale <= 0:
         parser.error('course must be a lowercase identifier and scale must be positive and finite')
-    vertices, triangles, path = read_source(args.mk64, args.course)
-    points, misses = heights(samples(path, args.scale), vertices, triangles)
-    trv, trf, trs = road(points, args.scale)
+    vertices, triangles, paths = read_source(args.mk64, args.course)
+    points, misses = heights(samples(paths[0], args.scale), vertices, triangles)
+    branch_points = []
+    for start, end, stretch in branches(paths, points, args.scale):
+        branch, fallback = heights(open_samples([points[start]] + stretch + [points[end]], args.scale), vertices, triangles)
+        misses += fallback
+        branch_points.append((start, end, branch))
+        print(f'  branch {start}->{end}: {len(branch)} sections')
+    trv, trf, trs = road(points, args.scale, branch_points)
     scene, objects, tims, after, capped, missing = scenery(vertices, triangles, args.scale, texture_map(args.mk64, args.course), args.no_textures)
     skyverts = [(-12000, 0, -12000), (12000, 0, -12000), (12000, 0, 12000), (-12000, 0, 12000), (0, -12000, 0)]
     skytris = [((i, (i+1)%4, 4), [(110, 160, 220), (110, 160, 220), (30, 60, 150)]) for i in range(4)]
@@ -444,7 +551,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     for name, data in files.items():
         (out / name).write_bytes(data)
-    print(f'{args.course}: {len(points)} sections, {len(trf)//20} faces, {len(triangles)} scene triangles, {objects} scene objects, {misses} height fallbacks')
+    print(f'{args.course}: {len(trs)//156} sections, {len(trf)//20} faces, {len(triangles)} scene triangles, {objects} scene objects, {misses} height fallbacks')
     print(f'  clipping: {len(triangles)} -> {after} triangles, {capped} capped, {len(tims)} textures')
     print('  unmapped: ' + (', '.join(missing) if missing else 'none'))
     for name, data in files.items():
@@ -457,5 +564,6 @@ if __name__ == '__main__':
         main()
     except (OSError, ValueError, struct.error) as exc:
         sys.exit(f'conversion failed: {exc}')
+
 
 

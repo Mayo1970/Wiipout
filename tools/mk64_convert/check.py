@@ -108,20 +108,58 @@ def check(folder):
         junction, prev, nxt = struct.unpack_from('>iii', trs, off)
         version, = struct.unpack_from('>h', trs, off+24)
         start, count = struct.unpack_from('>hh', trs, off+142)
-        assert junction == -1 and 0 <= prev < ns and 0 <= nxt < ns and version == 8
+        section_flags, = struct.unpack_from('>h', trs, off+150)
+        assert -1 <= junction < ns and 0 <= prev < ns and 0 <= nxt < ns and version == 8
         assert 0 <= start and start+count <= nf and count == 4
         flags = [trf[(start+j)*20+15] for j in range(count)]
         assert flags == [0, 1, 1, 0]
-        links.append((prev, nxt))
+        links.append((junction, prev, nxt, section_flags))
+    main = []
     seen = set()
     current = 0
-    for _ in range(ns):
-        assert current not in seen
+    while current not in seen:
         seen.add(current)
-        prev, nxt = links[current]
-        assert links[nxt][0] == current and links[prev][1] == current
+        main.append(current)
+        junction, prev, nxt, flags = links[current]
+        assert flags == 0 and links[nxt][1] == current and links[prev][2] == current
         current = nxt
-    assert current == 0 and len(seen) == ns
+    assert current == 0
+    main_set = set(main)
+    branches = set()
+    endpoints = {}
+    for i in main:
+        junction, prev, nxt, flags = links[i]
+        if junction == -1:
+            continue
+        target = links[junction]
+        assert target[3] in (0x30, 0x28) and target[0] == -1
+        if target[3] == 0x28:
+            continue
+        if links[nxt][0] == junction:
+            continue
+        assert links[prev][0] == junction and target[1] == i
+        current = junction
+        previous = i
+        walked = set()
+        while current not in main_set:
+            assert current not in walked and current not in branches
+            walked.add(current)
+            j, p, n, f = links[current]
+            assert j == -1 and p == previous and f in (0x30, 0x20, 0x28)
+            if current == junction: assert f == 0x30
+            previous, current = current, n
+        assert links[previous][3] == 0x28
+        assert links[current][0] == previous and links[links[current][1]][0] == previous
+        branches |= walked
+        endpoints[junction] = {prev, i}
+        endpoints[previous] = {links[current][1], current}
+    for i in main:
+        if links[i][0] != -1:
+            assert i in endpoints[links[i][0]]
+    assert seen | branches == set(range(ns))
+    for i in main:
+        if links[i][0] != -1:
+            assert links[i][0] in branches
     for name in ('scene', 'sky'):
         textures = compressed(folder/(name+'.cmp'))
         count, triangles = objects(folder/(name+'.prm'), textures)
