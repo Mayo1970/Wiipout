@@ -47,6 +47,7 @@ static bool view_2d;
 static void *fifo;
 static int back = 1;
 static mat4_t model_mat, view_mat, sprite_mat, projection_mat_3d;
+static bool model_mat_identity;
 static vec3_t camera_pos;
 static u8 *vertex_arena;
 static vec3_t *vertex_positions;
@@ -309,6 +310,7 @@ void render_frame_prepare(void) {
 	running_stats = (render_stats_t){0};
 	reset_vertex_streams();
 	view_mat = model_mat = sprite_mat = mat4_identity();
+	model_mat_identity = true;
 	set_model_view();
 	depth_test = depth_write = false;
 	depth_offset = 0;
@@ -373,6 +375,7 @@ void render_set_view(vec3_t pos, vec3_t angles) {
 	mat4_translate(&view_mat, vec3_inv(pos));
 	mat4_set_yaw_pitch_roll(&sprite_mat, vec3(-angles.x, angles.y - M_PI, 0));
 	model_mat = mat4_identity();
+	model_mat_identity = true;
 	depth_test = depth_write = true;
 	set_depth(); set_model_view(); set_projection();
 }
@@ -382,10 +385,17 @@ void render_set_view_2d(void) {
 	render_flush();
 	view_2d = true;
 	view_mat = model_mat = mat4_identity();
+	model_mat_identity = true;
 	depth_test = depth_write = false;
 	set_depth(); set_model_view(); set_projection();
 }
-void render_set_model_mat(mat4_t *m) { PROF_ADD(flush_model, !!tris_len); render_flush(); model_mat = *m; fade_inside = false; set_model_view(); }
+void render_set_model_mat(mat4_t *m) {
+	PROF_ADD(flush_model, !!tris_len); render_flush(); model_mat = *m;
+	mat4_t identity = mat4_identity();
+	model_mat_identity = true;
+	for (int i = 0; i < 16; i++) if (model_mat.m[i] != identity.m[i]) { model_mat_identity = false; break; }
+	fade_inside = false; set_model_view();
+}
 void render_set_depth_write(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_write = enabled; set_depth(); }
 void render_set_depth_test(bool enabled) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_test = enabled; set_depth(); }
 void render_set_depth_offset(float offset) { PROF_ADD(flush_state, !!tris_len); render_flush(); depth_offset = offset; set_projection(); }
@@ -399,6 +409,18 @@ void render_set_blend_mode(render_blend_mode_t mode) {
 	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, mode == RENDER_BLEND_LIGHTER ? GX_BL_ONE : GX_BL_INVSRCALPHA, GX_LO_CLEAR);
 }
 vec3_t render_transform(vec3_t pos) { return vec4_perspective_divide(vec3_transform_perspective(vec3_transform(pos, &view_mat), &projection_mat_3d)); }
+// Gekko has no hardware square root instruction.
+static inline float fade_distance(float distance_sq) {
+#if defined(__PPC__)
+	double x = distance_sq, y;
+	__asm__("frsqrte %0,%1" : "=f"(y) : "f"(x));
+	y = y * (1.5 - 0.5 * x * y * y);
+	y = y * (1.5 - 0.5 * x * y * y);
+	return (float)(x * y);
+#else
+	return sqrtf(distance_sq);
+#endif
+}
 void render_push_tris(tris_t tris, uint16_t texture) {
 	PROF_ADD(pushes, 1);
 	error_if(texture >= textures_len, "Invalid texture %d", texture);
@@ -410,12 +432,14 @@ void render_push_tris(tris_t tris, uint16_t texture) {
 	{
 		PROF_TICKS_START(push_start);
 		if (!view_2d && !fade_inside) for (int i = 0; i < 3; i++) {
-			vec3_t delta = vec3_sub(vec3_transform(tris.vertices[i].pos, &model_mat), camera_pos);
+			vec3_t pos = tris.vertices[i].pos;
+			vec3_t delta = vec3_sub(model_mat_identity ? pos : vec3_transform(pos, &model_mat), camera_pos);
 			static const float near_sq = RENDER_FADEOUT_NEAR * RENDER_FADEOUT_NEAR;
 			float distance_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
 			if (distance_sq <= near_sq) continue;
-			float distance = sqrtf(distance_sq);
-			float t = (RENDER_FADEOUT_FAR - distance) / (RENDER_FADEOUT_FAR - RENDER_FADEOUT_NEAR);
+			float distance = fade_distance(distance_sq);
+			static const float fade_range_inv = 1.0f / (RENDER_FADEOUT_FAR - RENDER_FADEOUT_NEAR);
+			float t = (RENDER_FADEOUT_FAR - distance) * fade_range_inv;
 			if (t < 0) t = 0; else if (t > 1) t = 1;
 			tris.vertices[i].color.a *= t * t * (3 - 2 * t);
 		}
