@@ -23,6 +23,13 @@ typedef struct {
 } char_set_t;
 
 int ui_scale = 2;
+static float ui_factor = 1.0f;
+static int ui_region_index = -1;
+
+void ui_set_region(int index) {
+	ui_region_index = index;
+	ui_factor = index < 0 ? 1.0f : 0.5f;
+}
 
 char_set_t char_set[UI_SIZE_MAX] = {
 	[UI_SIZE_16] = {
@@ -85,7 +92,7 @@ void ui_set_scale(int scale) {
 
 
 vec2i_t ui_scaled(vec2i_t v) {
-	return vec2i(v.x * ui_scale, v.y * ui_scale);
+	return vec2i(v.x * ui_scale * ui_factor, v.y * ui_scale * ui_factor);
 }
 
 vec2i_t ui_scaled_screen(void) {
@@ -95,9 +102,11 @@ vec2i_t ui_scaled_screen(void) {
 vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset) {
 	vec2i_t pos;
 	vec2i_t screen_size = render_size();
+	int region_top = ui_region_index < 0 ? 0 : screen_size.y * ui_region_index / 2;
+	int region_bottom = ui_region_index < 0 ? screen_size.y : screen_size.y * (ui_region_index + 1) / 2;
 
 	if (flags_is(anchor, UI_POS_LEFT)) {
-		pos.x = offset.x * ui_scale;
+		pos.x = offset.x * ui_scale * ui_factor;
 #ifdef PLATFORM_WII
 		if (render_gx_get_2d_scale() >= 1.0f) {
 			pos.x += screen_size.x * WII_UI_SAFE_PERCENT / 100;
@@ -105,10 +114,10 @@ vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset) {
 #endif
 	}
 	else if (flags_is(anchor, UI_POS_CENTER)) {
-		pos.x = (screen_size.x >> 1) + offset.x * ui_scale;
+		pos.x = (screen_size.x >> 1) + offset.x * ui_scale * ui_factor;
 	}
 	else if (flags_is(anchor, UI_POS_RIGHT)) {
-		pos.x = screen_size.x + offset.x * ui_scale;
+		pos.x = screen_size.x + offset.x * ui_scale * ui_factor;
 #ifdef PLATFORM_WII
 		if (render_gx_get_2d_scale() >= 1.0f) {
 			pos.x -= screen_size.x * WII_UI_SAFE_PERCENT / 100;
@@ -117,7 +126,7 @@ vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset) {
 	}
 
 	if (flags_is(anchor, UI_POS_TOP)) {
-		pos.y = offset.y * ui_scale;
+		pos.y = region_top + offset.y * ui_scale * ui_factor;
 #ifdef PLATFORM_WII
 		if (render_gx_get_2d_scale() >= 1.0f) {
 			pos.y += screen_size.y * WII_UI_SAFE_PERCENT / 100;
@@ -125,10 +134,10 @@ vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset) {
 #endif
 	}
 	else if (flags_is(anchor, UI_POS_MIDDLE)) {
-		pos.y = (screen_size.y >> 1) + offset.y * ui_scale;
+		pos.y = (region_top + region_bottom) / 2 + offset.y * ui_scale * ui_factor;
 	}
 	else if (flags_is(anchor, UI_POS_BOTTOM)) {
-		pos.y = screen_size.y + offset.y * ui_scale;
+		pos.y = region_bottom + offset.y * ui_scale * ui_factor;
 #ifdef PLATFORM_WII
 		if (render_gx_get_2d_scale() >= 1.0f) {
 			pos.y -= screen_size.y * WII_UI_SAFE_PERCENT / 100;
@@ -217,10 +226,10 @@ void ui_draw_text(const char *text, vec2i_t pos, ui_text_size_t size, rgba_t col
 			glyph_t *glyph = &cs->glyphs[char_to_glyph_index(text[i])];
 			vec2i_t size = vec2i(glyph->width, cs->height);
 			render_push_2d_tile(pos, glyph->offset, size, ui_scaled(size), color, cs->texture);
-			pos.x += glyph->width * ui_scale;
+			pos.x += glyph->width * ui_scale * ui_factor;
 		}
 		else {
-			pos.x += 8 * ui_scale;
+			pos.x += 8 * ui_scale * ui_factor;
 		}
 	}
 }
@@ -235,6 +244,6 @@ void ui_draw_icon(ui_icon_type_t icon, vec2i_t pos, rgba_t color) {
 }
 
 void ui_draw_text_centered(const char *text, vec2i_t pos, ui_text_size_t size, rgba_t color) {
-	pos.x -= (ui_text_width(text, size) * ui_scale) >> 1;
+	pos.x -= (int)(ui_text_width(text, size) * ui_scale * ui_factor) / 2;
 	ui_draw_text(text, pos, size, color);
 }

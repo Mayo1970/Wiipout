@@ -27,7 +27,7 @@ typedef struct droid_t {
 	sfx_t *sfx_tractor;
 } droid_t;
 
-void droid_draw(droid_t *droid);
+void droid_draw(droid_t *droid, bool advance);
 
 void droid_load(void);
 void droid_init(droid_t *droid, ship_t *ship);

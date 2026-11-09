@@ -59,6 +59,7 @@ static uint32_t positions_zeroed_end, colors_zeroed_end, uvs_zeroed_end;
 static bool depth_write, depth_test;
 static float depth_offset;
 static float frustum_planes[4][4];
+static float viewport_aspect_scale = 1.0f;
 
 #ifdef WII_DIAG
 #define DIAG_BATCHES 16
@@ -205,8 +206,10 @@ bool render_gx_sphere_visible(vec3_t center, float radius) {
 
 static void set_projection(void) {
 	Mtx44 projection;
-	float aspect = (float)screen_size.x / screen_size.y;
-	float f = 1.0f / tanf((float)(73.75 * M_PI / 360.0));
+	float aspect = (float)screen_size.x / screen_size.y * viewport_aspect_scale;
+	// Split views keep the full-screen horizontal FOV and narrow the vertical one.
+	float fov_y = viewport_aspect_scale == 1.0f ? 73.75f : 2.0f * atanf(tanf((float)(73.75 * M_PI / 360.0)) / viewport_aspect_scale) * (float)(180.0 / M_PI);
+	float f = 1.0f / tanf((float)(fov_y * M_PI / 360.0));
 	float nf = 1.0f / (NEAR_PLANE - RENDER_FADEOUT_FAR);
 	projection_mat_3d = mat4(f / aspect, 0, 0, 0, 0, f, 0, 0,
 		0, 0, (RENDER_FADEOUT_FAR + NEAR_PLANE) * nf, -1,
@@ -222,7 +225,7 @@ static void set_projection(void) {
 		GX_LoadProjectionMtx(projection, GX_ORTHOGRAPHIC);
 	}
 	else {
-		guPerspective(projection, 73.75f, aspect, NEAR_PLANE, RENDER_FADEOUT_FAR);
+		guPerspective(projection, fov_y, aspect, NEAR_PLANE, RENDER_FADEOUT_FAR);
 		projection[0][2] -= screen_position.x;
 		projection[1][2] += screen_position.y;
 		// GX has no slope-scaled polygon offset; the [2][3] term adds a view-space bias of about
@@ -347,6 +350,19 @@ void render_gx_set_2d_scale(float scale) {
 	}
 }
 float render_gx_get_2d_scale(void) { return view_2d_scale; }
+void render_set_viewport(int index, int count) {
+	GXRModeObj *mode = platform_wii_video_mode();
+	int width = mode->fbWidth - 2 * WII_OVERSCAN_X;
+	int height = mode->efbHeight - 2 * WII_OVERSCAN_Y;
+	int top = height * index / count;
+	int bottom = height * (index + 1) / count;
+	PROF_ADD(flush_state, !!tris_len);
+	render_flush();
+	GX_SetViewport(WII_OVERSCAN_X, WII_OVERSCAN_Y + top, width, bottom - top, 0, 1);
+	GX_SetScissor(WII_OVERSCAN_X, WII_OVERSCAN_Y + top, width, bottom - top);
+	viewport_aspect_scale = (float)height / (bottom - top);
+	set_projection();
+}
 void render_set_screen_size(vec2i_t size) { PROF_ADD(flush_state, !!tris_len); render_flush(); screen_size = size; set_projection(); }
 void render_set_resolution(render_resolution_t res) { (void)res; }
 void render_set_post_effect(render_post_effect_t post) { (void)post; }

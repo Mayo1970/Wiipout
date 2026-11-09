@@ -381,10 +381,10 @@ void weapon_update_mine(weapon_t *self) {
 		sfx_play_at(SFX_EXPLOSION_1, self->position, vec3(0,0,0), 1);
 		self->active = false;
 		if (flags_not(ship->flags, SHIP_SHIELDED)) {
-			if (ship->pilot == g.pilot) {
+			if (game_player_for_pilot(ship->pilot) >= 0) {
 				ship->velocity = vec3_sub(ship->velocity, vec3_mulf(ship->velocity, 0.125));
-				camera_set_shake(&g.camera, CAMERA_SHAKE_LONG);
-				rumble_impulse(0.8f, 0.4f);
+				camera_set_shake(&g.cameras[game_player_for_pilot(ship->pilot)], CAMERA_SHAKE_LONG);
+				if (ship->pilot == g.pilot) rumble_impulse(0.8f, 0.4f);
 			}
 			else {
 				ship->speed = ship->speed * 0.125;
@@ -431,12 +431,12 @@ void weapon_update_missile(weapon_t *self) {
 		self->active = false;
 
 		if (flags_not(ship->flags, SHIP_SHIELDED)) {
-			if (ship->pilot == g.pilot) {
+			if (game_player_for_pilot(ship->pilot) >= 0) {
 				ship->velocity = vec3_sub(ship->velocity, vec3_mulf(ship->velocity, 0.75));
 				ship->angular_velocity.z += rand_float(-0.1, 0.1);
 				ship->turn_rate_from_hit = rand_float(-0.1, 0.1);
-				camera_set_shake(&g.camera, CAMERA_SHAKE_LONG);
-				rumble_impulse(1.0f, 0.5f);
+				camera_set_shake(&g.cameras[game_player_for_pilot(ship->pilot)], CAMERA_SHAKE_LONG);
+				if (ship->pilot == g.pilot) rumble_impulse(1.0f, 0.5f);
 			}
 			else {
 				ship->speed = ship->speed * 0.03125;
@@ -481,12 +481,12 @@ void weapon_update_rocket(weapon_t *self) {
 		self->active = false;
 
 		if (flags_not(ship->flags, SHIP_SHIELDED)) {
-			if (ship->pilot == g.pilot) {
+			if (game_player_for_pilot(ship->pilot) >= 0) {
 				ship->velocity = vec3_mulf(ship->velocity, 0.25);
 				ship->angular_velocity.z += rand_float(-0.1, 0.1);;
 				ship->turn_rate_from_hit = rand_float(-0.1, 0.1);;
-				camera_set_shake(&g.camera, CAMERA_SHAKE_LONG);
-				rumble_impulse(1.0f, 0.5f);
+				camera_set_shake(&g.cameras[game_player_for_pilot(ship->pilot)], CAMERA_SHAKE_LONG);
+				if (ship->pilot == g.pilot) rumble_impulse(1.0f, 0.5f);
 			}
 			else {
 				ship->speed = ship->speed * 0.03125;

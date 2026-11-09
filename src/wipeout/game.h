@@ -233,7 +233,8 @@ typedef struct {
 	int race_type;
 	int highscore_tab;
 	int team;
-	int pilot;
+	union { int pilots[2]; struct { int pilot; int pilot2; }; };
+	int players;
 	int circuit;
 	bool is_attract_mode;
 	bool show_credits;
@@ -249,8 +250,8 @@ typedef struct {
 	pilot_points_t race_ranks[NUM_PILOTS];
 	pilot_points_t championship_ranks[NUM_PILOTS];
 
-	camera_t camera;
-	droid_t droid;
+	union { camera_t cameras[2]; struct { camera_t camera, camera2; }; };
+	union { droid_t droids[2]; struct { droid_t droid, droid2; }; };
 	ship_t ships[NUM_PILOTS];
 	track_t track;
 
@@ -311,6 +312,12 @@ typedef struct {
 extern const game_def_t def;
 extern game_t g;
 extern save_t save;
+
+static inline int game_player_for_pilot(int pilot) {
+	if (pilot == g.pilots[0]) return 0;
+	if (!g.is_attract_mode && g.players == 2 && pilot == g.pilots[1]) return 1;
+	return -1;
+}
 
 void game_init(void);
 void game_set_scene(game_scene_t scene);

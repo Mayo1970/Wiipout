@@ -46,8 +46,8 @@ void droid_init(droid_t *droid, ship_t *ship) {
 	flags_rm(droid->sfx_tractor->flags, SFX_PLAY);
 }
 
-void droid_draw(droid_t *droid) {
-	droid->cycle_timer += system_tick() * M_PI * 2;
+void droid_draw(droid_t *droid, bool advance) {
+	if (advance) droid->cycle_timer += system_tick() * M_PI * 2;
 
 	int rf = sinf(droid->cycle_timer) * 127 + 128;
 	int gf = sinf(droid->cycle_timer + 0.2) * 127 + 128;
@@ -176,13 +176,13 @@ void droid_update_idle(droid_t *droid, ship_t *ship) {
 		droid->update_func = droid_update_rescue;
 		droid->update_timer = DROID_UPDATE_TIME_INITIAL;
 
-		g.camera.update_func = camera_update_rescue;
+		g.cameras[game_player_for_pilot(ship->pilot)].update_func = camera_update_rescue;
 		flags_add(ship->flags, SHIP_VIEW_REMOTE);
 		if (flags_is(ship->section->flags, SECTION_JUMP)) {
-			g.camera.section = ship->section->next;
+			g.cameras[game_player_for_pilot(ship->pilot)].section = ship->section->next;
 		}
 		else {
-			g.camera.section = ship->section;
+			g.cameras[game_player_for_pilot(ship->pilot)].section = ship->section;
 		}
 
 		// If droid is not nearby the rescue position teleport it in!

@@ -167,11 +167,15 @@ void input_unbind_all(input_layer_t layer);
 uint8_t input_bound_to_action(button_t button);
 
 void input_set_button_state(button_t button, float state);
+void input_set_player_button_state(int player, button_t button, float state);
 void input_set_mouse_pos(int32_t x, int32_t y);
 void input_textinput(int32_t ascii_char);
 
 void input_capture(input_capture_callback_t cb, void *user);
 
+float input_player_state(int player, uint8_t action);
+bool input_player_pressed(int player, uint8_t action);
+bool input_player_released(int player, uint8_t action);
 float input_state(uint8_t action);
 bool input_pressed(uint8_t action);
 bool input_released(uint8_t action);

@@ -162,10 +162,12 @@ static void hud_draw_speedo(int speed, int thrust) {
 	render_push_2d(facia_pos, ui_scaled(render_texture_size(speedo_facia_texture)), rgba(128, 128, 128, 255), speedo_facia_texture);
 }
 
-static void hud_draw_target_icon(vec3_t position) {
+static void hud_draw_target_icon(vec3_t position, const vec3_t *target_projection, int view) {
 	vec2i_t screen_size = render_size();
 	vec2i_t size = ui_scaled(render_texture_size(target_reticle));
-	vec3_t projected = render_transform(position);
+	vec3_t projected = target_projection ? *target_projection : render_transform(position);
+	int top = target_projection ? screen_size.y * view / 2 : 0;
+	int height = target_projection ? screen_size.y * (view + 1) / 2 - top : screen_size.y;
 
 	// Not on screen?
 	if (
@@ -178,12 +180,13 @@ static void hud_draw_target_icon(vec3_t position) {
 
 	vec2i_t pos = vec2i(
 		(( projected.x + 1.0) / 2.0) * screen_size.x - size.x / 2,
-		((-projected.y + 1.0) / 2.0) * screen_size.y - size.y / 2
+		top + ((-projected.y + 1.0) / 2.0) * height - size.y / 2
 	);
+	if (target_projection && (pos.y < top || pos.y + size.y > top + height)) return;
 	render_push_2d(pos, size, rgba(128, 128, 128, 128), target_reticle);
 }
 
-void hud_draw(ship_t *ship) {
+void hud_draw(ship_t *ship, camera_t *camera, const vec3_t *target_projection, int view) {
 	// Current lap time
 	if (ship->lap >= 0) {
 		ui_draw_time(ship->lap_time, ui_scaled_pos(UI_POS_BOTTOM | UI_POS_LEFT, vec2i(16, -30)), UI_SIZE_16, UI_COLOR_DEFAULT);
@@ -237,7 +240,7 @@ void hud_draw(ship_t *ship) {
 	}
 
 	// Speedo
-	int speedo_speed = (g.camera.update_func == camera_update_attract_internal)
+	int speedo_speed = (camera->update_func == camera_update_attract_internal)
 		? ship->speed * 7
 		: ship->speed;
 	hud_draw_speedo(speedo_speed, ship->thrust_mag);
@@ -259,6 +262,6 @@ void hud_draw(ship_t *ship) {
 
 	// Weapon target reticle
 	if (ship->weapon_target) {
-		hud_draw_target_icon(ship->weapon_target->position);
+		hud_draw_target_icon(ship->weapon_target->position, target_projection, view);
 	}
 }

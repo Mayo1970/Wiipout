@@ -37,6 +37,7 @@ void ui_cleanup(void);
 
 int ui_get_scale(void);
 void ui_set_scale(int scale);
+void ui_set_region(int index);
 vec2i_t ui_scaled(vec2i_t v);
 vec2i_t ui_scaled_screen(void);
 vec2i_t ui_scaled_pos(ui_pos_t anchor, vec2i_t offset);

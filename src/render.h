@@ -45,6 +45,11 @@ void render_frame_end(void);
 // render_stats_t owned by the renderer
 const render_stats_t* render_frame_get_stats(void);
 
+#ifdef RENDERER_GX
+void render_set_viewport(int index, int count);
+#else
+static inline void render_set_viewport(int index, int count) { (void)index; (void)count; }
+#endif
 void render_set_view(vec3_t pos, vec3_t angles);
 void render_set_view_2d(void);
 void render_set_model_mat(mat4_t *m);

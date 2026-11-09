@@ -14,6 +14,9 @@
 #include "sfx.h"
 #include "rumble.h"
 
+static int finish_order[NUM_PILOTS];
+static int finish_count;
+
 int engine_flag_compare(const void *a, const void *b) {
 	primitive_t prm1 = *(primitive_t *)a;
 	primitive_t prm2 = *(primitive_t *)b;
@@ -46,7 +49,7 @@ void ships_load(void) {
 		ship_init_exhaust_plume(&g.ships[ship_index]);
 	}
 
-	error_if(object_index != len(g.ships), "Expected %ld ship models, got %d", len(g.ships), object_index);
+	error_if(object_index != len(g.ships), "Expected %u ship models, got %d", (unsigned)len(g.ships), object_index);
 
 	uint16_t shadow_textures_start = render_textures_len();
 	image_get_texture_semi_trans("wipeout/textures/shad1.tim");
@@ -61,6 +64,8 @@ void ships_load(void) {
 
 
 void ships_init(section_t *section) {
+	clear(finish_order);
+	finish_count = 0;
 	section_t *start_sections[len(g.ships)];
 
 	int ranks_to_pilots[NUM_PILOTS];
@@ -115,6 +120,11 @@ void ships_init(section_t *section) {
 static inline bool sort_rank_compare(pilot_points_t *pa, pilot_points_t *pb) {
 	ship_t *a = &g.ships[pa->pilot];
 	ship_t *b = &g.ships[pb->pilot];
+	if (g.players == 2 && !g.is_attract_mode && (finish_order[pa->pilot] || finish_order[pb->pilot])) {
+		if (!finish_order[pa->pilot]) return true;
+		if (!finish_order[pb->pilot]) return false;
+		return finish_order[pa->pilot] > finish_order[pb->pilot];
+	}
 	if (a->total_section_num == b->total_section_num) {
 		vec3_t c0 = a->section->center;
 		vec3_t c1 = a->section->next->center;
@@ -130,7 +140,9 @@ static inline bool sort_rank_compare(pilot_points_t *pa, pilot_points_t *pb) {
 
 void ships_update(void) {
 	if (g.race_type == RACE_TYPE_TIME_TRIAL) {
-		ship_update(&g.ships[g.pilot]);
+		for (int i = 0; i < (g.is_attract_mode ? 1 : g.players); i++) {
+			ship_update(&g.ships[g.pilots[i]]);
+		}
 	}
 	else {
 		for (int i = 0; i < len(g.ships); i++) {
@@ -149,6 +161,10 @@ void ships_update(void) {
 			}
 		}
 	}
+	if (g.players == 2 && !g.is_attract_mode && flags_is(g.ships[g.pilot].flags, SHIP_RACING) &&
+		g.ships[g.pilots[0]].max_lap >= NUM_LAPS && g.ships[g.pilots[1]].max_lap >= NUM_LAPS) {
+		race_end();
+	}
 }
 
 void ships_reset_exhaust_plumes(void) {
@@ -158,12 +174,12 @@ void ships_reset_exhaust_plumes(void) {
 }
 
 
-void ships_draw(void) {
+void ships_draw(int view_pilot) {
 	// Ship models
 	for (int i = 0; i < len(g.ships); i++) {
 		if (
-			(flags_is(g.ships[i].flags, SHIP_VIEW_INTERNAL) && flags_not(g.ships[i].flags, SHIP_IN_RESCUE)) ||
-			(g.race_type == RACE_TYPE_TIME_TRIAL && i != g.pilot)
+			((g.players == 1 || i == view_pilot) && flags_is(g.ships[i].flags, SHIP_VIEW_INTERNAL) && flags_not(g.ships[i].flags, SHIP_IN_RESCUE)) ||
+			(g.race_type == RACE_TYPE_TIME_TRIAL && i != g.pilot && (g.players < 2 || i != g.pilots[1]))
 		) {
 			continue;
 		}
@@ -182,7 +198,7 @@ void ships_draw(void) {
 
 	for (int i = 0; i < len(g.ships); i++) {
 		if (
-			(g.race_type == RACE_TYPE_TIME_TRIAL && i != g.pilot) ||
+			(g.race_type == RACE_TYPE_TIME_TRIAL && i != g.pilot && (g.players < 2 || i != g.pilots[1])) ||
 			flags_not(g.ships[i].flags, SHIP_VISIBLE) || 
 			flags_is(g.ships[i].flags, SHIP_FLYING)
 		) {
@@ -240,7 +256,7 @@ void ship_init(ship_t *self, section_t *section, int pilot, int inv_start_rank) 
 	self->update_timer = UPDATE_TIME_INITIAL;
 	self->position_rank = NUM_PILOTS - inv_start_rank;
 
-	if (pilot == g.pilot) {
+	if (game_player_for_pilot(pilot) >= 0) {
 		self->update_func = ship_player_update_intro;
 		self->remote_thrust_max = 2900;
 		self->remote_thrust_mag = 46;
@@ -515,7 +531,7 @@ void ship_update(ship_t *self) {
 		self->weapon_type == WEAPON_TYPE_NONE &&
 		track_collect_pickups(face)
 	) {
-		if (self->pilot == g.pilot) {
+		if (game_player_for_pilot(self->pilot) >= 0) {
 			sfx_play(SFX_POWERUP);
 			if (flags_is(self->flags, SHIP_SHIELDED)) {
 				self->weapon_type = weapon_get_random_type(WEAPON_CLASS_PROJECTILE);
@@ -539,7 +555,7 @@ void ship_update(ship_t *self) {
 
 	int exhaust_len;
 
-	if (self->pilot == g.pilot) {
+	if (game_player_for_pilot(self->pilot) >= 0) {
 		// get the z exhaust_len related to speed or thrust
 		exhaust_len = self->thrust_mag * 0.0625;
 		exhaust_len += self->speed * 0.00390625;
@@ -595,7 +611,10 @@ void ship_update(ship_t *self) {
 				self->weapon_type = WEAPON_TYPE_TURBO;
 			}
 
-			if (self->lap == NUM_LAPS && self->pilot == g.pilot) {
+			if (self->lap == NUM_LAPS && g.players == 2 && !g.is_attract_mode) {
+				finish_order[self->pilot] = ++finish_count;
+			}
+			if (self->lap == NUM_LAPS && self->pilot == g.pilot && (g.players == 1 || g.is_attract_mode)) {
 				race_end();
 			}
 		}

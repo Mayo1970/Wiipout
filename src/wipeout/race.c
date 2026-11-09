@@ -83,12 +83,16 @@ void race_update(void) {
 		PROF_WAIT_SUBTRACT(sim_ships_ms, sim_ships_wait);
 		PROF_WAIT_SNAPSHOT(sim_droid_wait);
 		PROF_TIME_START(sim_droid_start);
-		droid_update(&g.droid, &g.ships[g.pilot]);
+		for (int i = 0; i < (g.is_attract_mode ? 1 : g.players); i++) {
+			droid_update(&g.droids[i], &g.ships[g.pilots[i]]);
+		}
 		PROF_TIME_ADD(sim_droid_ms, sim_droid_start);
 		PROF_WAIT_SUBTRACT(sim_droid_ms, sim_droid_wait);
 		PROF_WAIT_SNAPSHOT(sim_camera_wait);
 		PROF_TIME_START(sim_camera_start);
-		camera_update(&g.camera, &g.ships[g.pilot], &g.droid);
+		for (int i = 0; i < (g.is_attract_mode ? 1 : g.players); i++) {
+			camera_update(&g.cameras[i], &g.ships[g.pilots[i]], &g.droids[i]);
+		}
 		PROF_TIME_ADD(sim_camera_ms, sim_camera_start);
 		PROF_WAIT_SUBTRACT(sim_camera_ms, sim_camera_wait);
 		PROF_WAIT_SNAPSHOT(sim_weapons_wait);
@@ -137,41 +141,52 @@ void race_update(void) {
 				game_set_scene(GAME_SCENE_TITLE);
 			}
 		}
-		else if (active_menu == NULL && (input_pressed(A_MENU_START) || input_pressed(A_MENU_QUIT))) {
+		else if (active_menu == NULL && (input_pressed(A_MENU_START) || input_pressed(A_MENU_QUIT) ||
+			(g.players == 2 && (input_player_pressed(1, A_MENU_START) || input_player_pressed(1, A_MENU_QUIT))))) {
 			race_pause();
 		}
 	}
 
 
 	// Draw 3D
-	render_set_view(g.camera.position, g.camera.angle);
-	render_set_screen_position(g.camera.shake);
+	int views = g.is_attract_mode ? 1 : g.players;
+	vec3_t target_projections[2];
+	for (int view = 0; view < views; view++) {
+		camera_t *camera = &g.cameras[view];
+		if (views == 2) render_set_viewport(view, 2);
+		render_set_view(camera->position, camera->angle);
+		render_set_screen_position(camera->shake);
 
-	PROF_WAIT_SNAPSHOT(draw_scene_wait);
-	PROF_TIME_START(draw_scene_start);
-	scene_draw(&g.camera);
-	PROF_TIME_ADD(draw_scene_ms, draw_scene_start);
-	PROF_WAIT_SUBTRACT(draw_scene_ms, draw_scene_wait);
-	render_set_cull_backface(false);
-	PROF_WAIT_SNAPSHOT(draw_track_wait);
-	PROF_TIME_START(draw_track_start);
-	track_draw(&g.camera);
-	PROF_TIME_ADD(draw_track_ms, draw_track_start);
-	PROF_WAIT_SUBTRACT(draw_track_ms, draw_track_wait);
-	render_set_cull_backface(true);
+		PROF_WAIT_SNAPSHOT(draw_scene_wait);
+		PROF_TIME_START(draw_scene_start);
+		scene_draw(camera);
+		PROF_TIME_ADD(draw_scene_ms, draw_scene_start);
+		PROF_WAIT_SUBTRACT(draw_scene_ms, draw_scene_wait);
+		render_set_cull_backface(false);
+		PROF_WAIT_SNAPSHOT(draw_track_wait);
+		PROF_TIME_START(draw_track_start);
+		track_draw(camera);
+		PROF_TIME_ADD(draw_track_ms, draw_track_start);
+		PROF_WAIT_SUBTRACT(draw_track_ms, draw_track_wait);
+		render_set_cull_backface(true);
 
-	PROF_WAIT_SNAPSHOT(draw_ships_wait);
-	PROF_TIME_START(draw_ships_start);
-	ships_draw();
-	PROF_TIME_ADD(draw_ships_ms, draw_ships_start);
-	PROF_WAIT_SUBTRACT(draw_ships_ms, draw_ships_wait);
-	PROF_WAIT_SNAPSHOT(draw_fx_wait);
-	PROF_TIME_START(draw_fx_start);
-	droid_draw(&g.droid);
-	weapons_draw();
-	particles_draw();
-	PROF_TIME_ADD(draw_fx_ms, draw_fx_start);
-	PROF_WAIT_SUBTRACT(draw_fx_ms, draw_fx_wait);
+		PROF_WAIT_SNAPSHOT(draw_ships_wait);
+		PROF_TIME_START(draw_ships_start);
+		ships_draw(g.pilots[view]);
+		PROF_TIME_ADD(draw_ships_ms, draw_ships_start);
+		PROF_WAIT_SUBTRACT(draw_ships_ms, draw_ships_wait);
+		PROF_WAIT_SNAPSHOT(draw_fx_wait);
+		PROF_TIME_START(draw_fx_start);
+		for (int i = 0; i < views; i++) droid_draw(&g.droids[i], view == 0);
+		weapons_draw();
+		particles_draw();
+		PROF_TIME_ADD(draw_fx_ms, draw_fx_start);
+		PROF_WAIT_SUBTRACT(draw_fx_ms, draw_fx_wait);
+		if (views == 2 && g.ships[g.pilots[view]].weapon_target) {
+			target_projections[view] = render_transform(g.ships[g.pilots[view]].weapon_target->position);
+		}
+	}
+	if (views == 2) render_set_viewport(0, 1);
 
 	// Draw 2d
 	render_set_screen_position(vec2(0,0));
@@ -184,7 +199,11 @@ void race_update(void) {
 	}
 
 	if (flags_is(g.ships[g.pilot].flags, SHIP_RACING)) {
-		hud_draw(&g.ships[g.pilot]);
+		for (int view = 0; view < views; view++) {
+			if (views == 2) ui_set_region(view);
+			hud_draw(&g.ships[g.pilots[view]], &g.cameras[view], views == 2 ? &target_projections[view] : NULL, view);
+		}
+		if (views == 2) ui_set_region(-1);
 		map_draw(&g.track, g.ships, len(g.ships), g.pilot);
 	}
 
@@ -203,10 +222,12 @@ void race_start(void) {
 	active_menu = NULL;
 	sfx_reset();
 	scene_init();
-	camera_init(&g.camera, g.track.sections);
-	g.camera.update_func = camera_update_race_intro;
 	ships_init(g.track.sections);
-	droid_init(&g.droid, &g.ships[g.pilot]);
+	for (int i = 0; i < (g.is_attract_mode ? 1 : g.players); i++) {
+		camera_init(&g.cameras[i], g.track.sections);
+		g.cameras[i].update_func = camera_update_race_intro;
+		droid_init(&g.droids[i], &g.ships[g.pilots[i]]);
+	}
 	particles_init();
 	weapons_init();
 
@@ -329,11 +350,14 @@ void race_next(void) {
 }
 
 void race_release_control(void) {
-	flags_rm(g.ships[g.pilot].flags, SHIP_RACING);
-	g.ships[g.pilot].remote_thrust_max = 3160;
-	g.ships[g.pilot].remote_thrust_mag = 32;
-	g.ships[g.pilot].speed = 3160;
-	g.camera.update_func = camera_update_attract_random;
+	for (int i = 0; i < (g.is_attract_mode ? 1 : g.players); i++) {
+		ship_t *ship = &g.ships[g.pilots[i]];
+		flags_rm(ship->flags, SHIP_RACING);
+		ship->remote_thrust_max = 3160;
+		ship->remote_thrust_mag = 32;
+		ship->speed = 3160;
+		g.cameras[i].update_func = camera_update_attract_random;
+	}
 }
 
 void race_pause(void) {

@@ -905,6 +905,7 @@ static void save_read_highscores(cJSON *root) {
 }
 
 void game_init(void) {
+	g.players = 1;
 	error_if(!platform_asset_exists("wipeout/track01/"), "Wipeout game content missing. Check your wipeout/ directory.\n");
 	if (platform_asset_exists("wipeout2/track01/") || platform_asset_exists("wipeout64/track01/")) {
 		g.additional_circuits = true;

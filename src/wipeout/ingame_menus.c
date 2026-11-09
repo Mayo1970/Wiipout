@@ -127,7 +127,7 @@ static void button_qualify_confirm(menu_t *menu, int data) {
 
 static void button_race_stats_continue(menu_t *menu, int data) {
 	if (g.race_type == RACE_TYPE_CHAMPIONSHIP) {
-		if (g.race_position <= QUALIFYING_RANK) {
+		if (g.race_position <= QUALIFYING_RANK || g.players == 2) {
 			page_race_points_init(menu);
 		}
 		else {
@@ -136,7 +136,10 @@ static void button_race_stats_continue(menu_t *menu, int data) {
 		}
 	}
 	else {
-		if (g.is_new_race_record) {
+		if (g.players == 2 && g.race_type != RACE_TYPE_TIME_TRIAL) {
+			page_race_points_init(menu);
+		}
+		else if (g.is_new_race_record) {
 			page_hall_of_fame_init(menu);
 		}
 		else {
@@ -168,10 +171,16 @@ static void page_race_stats_draw(menu_t *menu, int data) {
 	ui_draw_text("RACE STATISTICS", ui_scaled_pos(anchor, pos), UI_SIZE_8, UI_COLOR_ACCENT);
 	pos.y += 16;
 
+	if (g.players == 2) {
+		ui_draw_text("P1", ui_scaled_pos(anchor, vec2i(pos.x + 72, pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
+		ui_draw_text("P2", ui_scaled_pos(anchor, vec2i(pos.x + 180, pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
+		pos.y += 12;
+	}
 	for (int i = 0; i < NUM_LAPS; i++) {
 		ui_draw_text("LAP", ui_scaled_pos(anchor, vec2i(pos.x + 8, pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
 		ui_draw_number(i+1, ui_scaled_pos(anchor, vec2i(pos.x + 50, pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
 		ui_draw_time(g.lap_times[g.pilot][i], ui_scaled_pos(anchor, vec2i(pos.x + 72, pos.y)), UI_SIZE_8, UI_COLOR_DEFAULT);
+		if (g.players == 2) ui_draw_time(g.lap_times[g.pilots[1]][i], ui_scaled_pos(anchor, vec2i(pos.x + 180, pos.y)), UI_SIZE_8, UI_COLOR_DEFAULT);
 		pos.y+= 12;
 	}
 	pos.y += 32;
@@ -215,7 +224,13 @@ menu_t *race_stats_menu_init(void) {
 
 static void button_race_points_continue(menu_t *menu, int data) {
 	if (g.race_type == RACE_TYPE_CHAMPIONSHIP) {
-		page_championship_points_init(menu);
+		if (g.race_position <= QUALIFYING_RANK) {
+			page_championship_points_init(menu);
+		}
+		else {
+			menu_page_t *page = menu_confirm(menu, "CONTINUE QUALIFYING OR QUIT", "", "QUALIFY", "QUIT", button_qualify_confirm);
+			page->index = 0;
+		}
 	}
 	else if (g.is_new_race_record) {
 		page_hall_of_fame_init(menu);
@@ -233,21 +248,22 @@ static void page_race_points_draw(menu_t *menu, int data) {
 	ui_pos_t anchor = UI_POS_MIDDLE | UI_POS_CENTER;
 
 	ui_draw_text("PILOT NAME", ui_scaled_pos(anchor, pos), UI_SIZE_8, UI_COLOR_ACCENT);
-	ui_draw_text("POINTS", ui_scaled_pos(anchor, vec2i(pos.x + 222, pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
+	ui_draw_text(g.race_type == RACE_TYPE_CHAMPIONSHIP ? "POINTS" : "POSITION", ui_scaled_pos(anchor, vec2i(pos.x + (g.race_type == RACE_TYPE_CHAMPIONSHIP ? 222 : 200), pos.y)), UI_SIZE_8, UI_COLOR_ACCENT);
 
 	pos.y += 24;
 
 	for (int i = 0; i < len(g.race_ranks); i++) {
-		rgba_t color = g.race_ranks[i].pilot == g.pilot ? UI_COLOR_ACCENT : UI_COLOR_DEFAULT;
+		rgba_t color = game_player_for_pilot(g.race_ranks[i].pilot) >= 0 ? UI_COLOR_ACCENT : UI_COLOR_DEFAULT;
 		ui_draw_text(def.pilots[g.race_ranks[i].pilot].name, ui_scaled_pos(anchor, pos), UI_SIZE_8, color);
-		int w = ui_number_width(g.race_ranks[i].points, UI_SIZE_8);
-		ui_draw_number(g.race_ranks[i].points, ui_scaled_pos(anchor, vec2i(pos.x + 280 - w, pos.y)), UI_SIZE_8, color);
+		int value = g.race_type == RACE_TYPE_CHAMPIONSHIP ? g.race_ranks[i].points : i + 1;
+		int w = ui_number_width(value, UI_SIZE_8);
+		ui_draw_number(value, ui_scaled_pos(anchor, vec2i(pos.x + 280 - w, pos.y)), UI_SIZE_8, color);
 		pos.y += 12;
 	}
 }
 
 static void page_race_points_init(menu_t *menu) {
-	menu_page_t *page = menu_push(menu, "RACE POINTS", page_race_points_draw);
+	menu_page_t *page = menu_push(menu, g.race_type == RACE_TYPE_CHAMPIONSHIP ? "RACE POINTS" : "RACE RESULTS", page_race_points_draw);
 	flags_add(page->layout_flags, MENU_FIXED);
 	page->title_anchor = UI_POS_MIDDLE | UI_POS_CENTER;
 	page->title_pos = vec2i(0, -100);
