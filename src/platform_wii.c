@@ -899,6 +899,8 @@ static void profile_accumulate(profile_stats_t *s, double frame_ms) {
 	s->sum.track_total += wii_profile_frame.track_total;
 	s->sum.track_drawn += wii_profile_frame.track_drawn;
 	s->sum.track_far += wii_profile_frame.track_far;
+	s->sum.track_frustum_culled += wii_profile_frame.track_frustum_culled;
+	s->sum.objects_frustum_culled += wii_profile_frame.objects_frustum_culled;
 	s->sum.faces += wii_profile_frame.faces;
 	s->sum.objects_total += wii_profile_frame.objects_total;
 	s->sum.objects_drawn += wii_profile_frame.objects_drawn;
@@ -951,7 +953,7 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		" uploads=%llu"
 		" replacements=%llu"
 		" arena_peak=%llu"
-		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu log_sync_vsyncs=%llu log_sync_frames=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
+		" vsync_wait_avg_ms=%.3f vsync_wait_max_ms=%.3f work_avg_ms=%.3f work_max_ms=%.3f missed_vsyncs=%llu missed_frames=%llu log_sync_vsyncs=%llu log_sync_frames=%llu track_frustum_culled=%llu objects_frustum_culled=%llu\n", kind, (unsigned long long)s->frames, s->frame_ms / s->frames, s->frame_max,
 		s->sum.update_ms / s->frames, s->update_max, s->sum.submit_ms / s->frames, s->submit_max,
 		s->sum.wait_ms / s->frames, s->wait_max,
 		s->sum.sim_ships_ms / s->frames, s->sim_ships_max,
@@ -995,7 +997,8 @@ static void profile_print(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)s->sum.arena_peak,
 		s->sum.vsync_wait_ms / s->frames, s->vsync_wait_max, s->work_ms / s->frames, s->work_max,
 		(unsigned long long)s->missed_vsyncs, (unsigned long long)s->missed_frames,
-		(unsigned long long)s->log_sync_vsyncs, (unsigned long long)s->log_sync_frames);
+		(unsigned long long)s->log_sync_vsyncs, (unsigned long long)s->log_sync_frames,
+		(unsigned long long)s->sum.track_frustum_culled, (unsigned long long)s->sum.objects_frustum_culled);
 }
 
 static void profile_print_worst(const char *kind, const profile_stats_t *s) {
@@ -1010,7 +1013,7 @@ static void profile_print_worst(const char *kind, const profile_stats_t *s) {
 		" flush_end=%llu flush_other=%llu pushes=%llu dropped=%llu track_total=%llu track_drawn=%llu"
 		" track_far=%llu faces=%llu objects_total=%llu objects_drawn=%llu ships=%llu particles=%llu"
 		" uploads=%llu replacements=%llu arena_waits=%llu arena_peak=%llu"
-		" vsync_wait_ms=%.3f retraces=%u missed=%u\n",
+		" vsync_wait_ms=%.3f retraces=%u missed=%u track_frustum_culled=%llu objects_frustum_culled=%llu\n",
 		kind, s->frame_max, f->update_ms, f->submit_ms, f->wait_ms,
 		f->sim_ships_ms, f->sim_droid_ms, f->sim_camera_ms, f->sim_weapons_ms,
 		f->sim_rumble_ms, f->sim_particles_ms, f->sim_scene_ms, f->sim_map_ms,
@@ -1027,7 +1030,8 @@ static void profile_print_worst(const char *kind, const profile_stats_t *s) {
 		(unsigned long long)f->ships, (unsigned long long)f->particles,
 		(unsigned long long)f->uploads, (unsigned long long)f->replacements,
 		(unsigned long long)f->arena_waits, (unsigned long long)f->arena_peak,
-		f->vsync_wait_ms, (unsigned int)f->retraces, (unsigned int)f->missed);
+		f->vsync_wait_ms, (unsigned int)f->retraces, (unsigned int)f->missed,
+		(unsigned long long)f->track_frustum_culled, (unsigned long long)f->objects_frustum_culled);
 }
 
 static volatile u32 profile_retrace;

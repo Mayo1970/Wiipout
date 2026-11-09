@@ -154,6 +154,7 @@ void scene_draw(camera_t *camera) {
 			cam_dot < object->radius && 
 			dist_sq < (RENDER_FADEOUT_FAR * RENDER_FADEOUT_FAR)
 		) {
+			if (!object_gx_visible(object, &object->mat)) { PROF_ADD(objects_frustum_culled, 1); object = object->next; continue; }
 			PROF_ADD(objects_drawn, 1);
 			object_draw(object, &object->mat);
 		}

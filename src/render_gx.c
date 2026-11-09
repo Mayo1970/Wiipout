@@ -57,6 +57,7 @@ static uint32_t vertex_base;
 static uint32_t positions_zeroed_end, colors_zeroed_end, uvs_zeroed_end;
 static bool depth_write, depth_test;
 static float depth_offset;
+static float frustum_planes[4][4];
 
 #ifdef WII_DIAG
 #define DIAG_BATCHES 16
@@ -177,6 +178,30 @@ static void set_model_view(void) {
 	GX_LoadPosMtxImm(gx, GX_PNMTX0);
 }
 
+static void update_frustum(Mtx44 projection) {
+	float clip[4][4];
+	for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) {
+		clip[r][c] = 0;
+		for (int k = 0; k < 4; k++) clip[r][c] += projection[r][k] * view_mat.m[c * 4 + k];
+	}
+	for (int i = 0; i < 4; i++) {
+		float sign = (i & 1) ? -1.0f : 1.0f;
+		for (int c = 0; c < 4; c++) frustum_planes[i][c] = clip[3][c] + sign * clip[i / 2][c];
+		float *p = frustum_planes[i];
+		float length = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+		if (length > 0) for (int c = 0; c < 4; c++) p[c] /= length;
+	}
+}
+
+bool render_gx_sphere_visible(vec3_t center, float radius) {
+	radius = radius * 1.01f + 4.0f;
+	for (int i = 0; i < 4; i++) {
+		float *p = frustum_planes[i];
+		if (p[0] * center.x + p[1] * center.y + p[2] * center.z + p[3] < -radius) return false;
+	}
+	return true;
+}
+
 static void set_projection(void) {
 	Mtx44 projection;
 	float aspect = (float)screen_size.x / screen_size.y;
@@ -197,6 +222,7 @@ static void set_projection(void) {
 		projection[1][2] += screen_position.y;
 		// A small NDC depth shift approximates GL polygon offset toward the camera.
 		projection[2][2] -= depth_offset * 0.000001f;
+		update_frustum(projection);
 		GX_LoadProjectionMtx(projection, GX_PERSPECTIVE);
 	}
 }

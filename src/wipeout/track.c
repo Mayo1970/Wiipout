@@ -353,6 +353,7 @@ void track_draw(camera_t *camera) {
 			cam_dot > -s->radius &&
 			cam_dot < RENDER_FADEOUT_FAR + s->radius
 		) {
+			if (!render_gx_sphere_visible(s->center, s->radius)) { PROF_ADD(track_frustum_culled, 1); continue; }
 			PROF_ADD(track_drawn, 1);
 			float near_limit = RENDER_FADEOUT_NEAR - s->radius - 4.0f;
 			bool section_near = near_limit > 0 && vec3_len_sq(diff) < near_limit * near_limit;

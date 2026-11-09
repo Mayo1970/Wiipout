@@ -168,6 +168,7 @@ void ships_draw(void) {
 			continue;
 		}
 
+		if (!object_gx_visible(g.ships[i].model, &g.ships[i].mat)) continue;
 		PROF_ADD(ships, 1);
 		ship_draw(&g.ships[i]);
 	}

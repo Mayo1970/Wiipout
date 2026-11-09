@@ -238,6 +238,20 @@ Object *objects_load(char *name, texture_list_t tl) {
 				die("Unknown primitive type %x", prm->type);
 			} // switch
 		} // each prim
+#ifdef RENDERER_GX
+		object->frustum_radius = 0;
+		for (int i = 0; i < object->vertices_len; i++) {
+			object->frustum_radius = max(object->frustum_radius, vec3_len(object->vertices[i]));
+		}
+		for (int i = 0; i < object->primitives_len; i++) {
+			primitive_t *prm = &object->primitives[i];
+			if (prm->type == PRM_TYPE_SPR) {
+				float w = prm->u.spr.width * 0.5f, h = prm->u.spr.height * 0.5f;
+				float bound = vec3_len(object->vertices[prm->u.spr.coord]) + sqrtf(w * w + h * h);
+				object->frustum_radius = max(object->frustum_radius, bound);
+			}
+		}
+#endif
 		if (sortable) object_sort_primitives(object);
 	} // each object
 
@@ -245,6 +259,14 @@ Object *objects_load(char *name, texture_list_t tl) {
 	return objectList;
 }
 
+
+#ifdef RENDERER_GX
+bool object_gx_visible(Object *object, mat4_t *mat) {
+	float scale_sq = 0;
+	for (int c = 0; c < 3; c++) for (int r = 0; r < 3; r++) scale_sq += mat->m[c * 4 + r] * mat->m[c * 4 + r];
+	return render_gx_sphere_visible(vec3_transform(vec3(0, 0, 0), mat), max(object->radius, object->frustum_radius) * sqrtf(scale_sq));
+}
+#endif
 
 void object_draw(Object *object, mat4_t *mat) {
 	vec3_t *vertex = object->vertices;
