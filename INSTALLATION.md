@@ -60,9 +60,11 @@ The game looks for the data folder in this order:
 
 1. `wipeout/` in the same folder as `boot.dol`. You can give the app folder any name, for example `apps/MyWipeout/`.
 2. `sd:/apps/wiipeout/wipeout`
-3. `usb:/apps/wiipeout/wipeout`
+3. Any `sd:/apps/<folder>/wipeout`. The game uses the first one it finds.
+4. `usb:/apps/wiipeout/wipeout`
+5. Any `usb:/apps/<folder>/wipeout`.
 
-Step 1 needs a loader that gives the DOL path, such as the Homebrew Channel.
+Step 1 needs a loader that gives the DOL path, such as the Homebrew Channel. Steps 2 to 5 also work without it, for example when Dolphin boots the DOL directly.
 
 If no folder exists, the game shows "Data directory not found". Then HOME exits the game.
 

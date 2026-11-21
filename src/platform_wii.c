@@ -10,6 +10,7 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include <asndlib.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <dvm.h>
 #include <sdcard/wiisd_io.h>
@@ -608,6 +609,25 @@ static void platform_end_frame(void) {
 static bool platform_data_root_exists(const char *path) {
 	struct stat info;
 	return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+// Fallback when the loader gives no DOL path: first apps/<folder>/ that holds wipeout/.
+static bool platform_scan_apps(const char *apps_dir, char *out, size_t out_size) {
+	DIR *dir = opendir(apps_dir);
+	if (!dir) return false;
+	bool found = false;
+	struct dirent *entry;
+	char probe[300];
+	while (!found && (entry = readdir(dir))) {
+		if (entry->d_name[0] == '.') continue;
+		snprintf(probe, sizeof(probe), "%s%s/wipeout", apps_dir, entry->d_name);
+		if (platform_data_root_exists(probe)) {
+			snprintf(out, out_size, "%s%s/", apps_dir, entry->d_name);
+			found = true;
+		}
+	}
+	closedir(dir);
+	return found;
 }
 
 // USB drives can take a few seconds to spin up, so retry for about 3 s.
@@ -1483,8 +1503,12 @@ int main(int argc, char *argv[]) {
 			data_root = app_dir;
 		}
 	}
+	static char scan_root[300];
 	if (!data_root && sd_mounted && platform_data_root_exists("sd:/apps/wiipeout/wipeout")) {
 		data_root = "sd:/apps/wiipeout/";
+	}
+	if (!data_root && sd_mounted && platform_scan_apps("sd:/apps/", scan_root, sizeof(scan_root))) {
+		data_root = scan_root;
 	}
 #if !defined(PATH_ASSETS) || !defined(PATH_USERDATA)
 	if (!data_root) {
@@ -1492,10 +1516,13 @@ int main(int argc, char *argv[]) {
 		if (usb_mounted && platform_data_root_exists("usb:/apps/wiipeout/wipeout")) {
 			data_root = "usb:/apps/wiipeout/";
 		}
+		else if (usb_mounted && platform_scan_apps("usb:/apps/", scan_root, sizeof(scan_root))) {
+			data_root = scan_root;
+		}
 	}
 	if (!data_root) {
 		if (app_dir) printf("ERROR: Data directory not found: %swipeout\n", app_dir);
-		printf("ERROR: Data directory not found: sd:/apps/wiipeout/wipeout or usb:/apps/wiipeout/wipeout. Press HOME to exit.\n");
+		printf("ERROR: Data directory not found: no apps/<folder>/wipeout on SD or USB. Press HOME to exit.\n");
 		platform_wii_log_sync();
 		while (!wants_to_exit && !power_requested && !reset_requested) {
 			platform_pump_events();
