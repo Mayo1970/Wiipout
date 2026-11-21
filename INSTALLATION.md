@@ -20,6 +20,11 @@ The `docker-make` scripts build in the devkitPPC Docker image.
 
 The output is in `dist/apps/wiipeout/`.
 
+There are two builds:
+
+- Release (default): does not write a log file.
+- Debug: add `WII_DEBUG=1` to the command. It writes `wiipeout.log`. The output is in `dist-debug/apps/wiipeout/`.
+
 ## Install
 
 1. Copy the `apps/wiipeout/` folder to the root of the SD card or USB drive.
@@ -53,17 +58,20 @@ apps/wiipeout/
 
 The game looks for the data folder in this order:
 
-1. `sd:/apps/wiipeout/wipeout`
-2. `usb:/apps/wiipeout/wipeout`
+1. `wipeout/` in the same folder as `boot.dol`. You can give the app folder any name, for example `apps/MyWipeout/`.
+2. `sd:/apps/wiipeout/wipeout`
+3. `usb:/apps/wiipeout/wipeout`
 
-If neither folder exists, the game shows "Data directory not found". Then HOME exits the game.
+Step 1 needs a loader that gives the DOL path, such as the Homebrew Channel.
+
+If no folder exists, the game shows "Data directory not found". Then HOME exits the game.
 
 ## Save files and logs
 
-The game writes these files to `apps/wiipeout/`. It uses the same device as the data.
+The game writes these files to the folder that contains the `wipeout/` data folder.
 
 - `save.json`: best times and settings.
-- `wiipeout.log`: log file (SD card only).
+- `wiipeout.log`: log file. Debug build only, SD card only.
 
 ## Launch the game
 

@@ -47,6 +47,11 @@ void *__ppc_main_sp __attribute__((section(".sdata"))) = &stack[sizeof(stack)];
 #include "wipeout/ship_player.h"
 #endif
 
+// Only debug-type builds write wiipeout.log; the smoke and profile tools read it.
+#if defined(WII_DEBUG) || defined(WII_SMOKE) || defined(WII_PROFILE) || defined(WII_DIAG)
+#define WII_LOG_FILE
+#endif
+
 static GXRModeObj *video_mode;
 static bool video_widescreen;
 static void *video_xfb[2];
@@ -257,7 +262,7 @@ static void platform_log_close(void) {
 	}
 }
 
-static void platform_log_init(bool sd_mounted) {
+static void platform_log_init(bool sd_mounted, const char *app_dir) {
 	console_stdout = devoptab_list[STD_OUT];
 	console_stderr = devoptab_list[STD_ERR];
 	log_stdout = *console_stdout;
@@ -266,11 +271,37 @@ static void platform_log_init(bool sd_mounted) {
 	log_stderr.write_r = platform_log_write_stderr;
 	devoptab_list[STD_OUT] = &log_stdout;
 	devoptab_list[STD_ERR] = &log_stderr;
+#ifdef WII_LOG_FILE
 	if (sd_mounted) {
-		mkdir("sd:/apps/wiipeout", 0777);
-		log_file = fopen("sd:/apps/wiipeout/wiipeout.log", "w");
+		if (app_dir && strncmp(app_dir, "sd:/", 4) == 0) {
+			char log_path[300];
+			snprintf(log_path, sizeof(log_path), "%swiipeout.log", app_dir);
+			log_file = fopen(log_path, "w");
+		}
+		if (!log_file) {
+			mkdir("sd:/apps/wiipeout", 0777);
+			log_file = fopen("sd:/apps/wiipeout/wiipeout.log", "w");
+		}
 	}
+#else
+	(void)sd_mounted;
+	(void)app_dir;
+#endif
 	atexit(platform_log_close);
+}
+
+// HBC passes the DOL path in argv[0]; the data folder sits next to boot.dol.
+static const char *platform_app_dir(int argc, char *argv[]) {
+	static char dir[256];
+	if (argc < 1 || !argv || !argv[0]) return NULL;
+	const char *colon = strchr(argv[0], ':');
+	const char *slash = strrchr(argv[0], '/');
+	if (!colon || !slash || slash < colon) return NULL;
+	size_t len = (size_t)(slash - argv[0]) + 1;
+	if (len >= sizeof(dir)) return NULL;
+	memcpy(dir, argv[0], len);
+	dir[len] = '\0';
+	return dir;
 }
 
 static void platform_power_callback(void) {
@@ -577,6 +608,15 @@ static void platform_end_frame(void) {
 static bool platform_data_root_exists(const char *path) {
 	struct stat info;
 	return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+// USB drives can take a few seconds to spin up, so retry for about 3 s.
+static bool platform_mount_usb(void) {
+	for (int i = 0; i < 20; i++) {
+		if (dvmProbeMountDiscIface("usb", &__io_usbstorage, 4, 64)) return true;
+		if (i < 19) usleep(150000);
+	}
+	return false;
 }
 
 void platform_exit(void) {
@@ -1411,8 +1451,7 @@ int main(int argc, char *argv[]) {
 		SYS_SetArena2Hi((void *)base);
 	}
 	mem_init((void *)base);
-	(void)argc;
-	(void)argv;
+	const char *app_dir = platform_app_dir(argc, argv);
 
 	start_tick = gettime();
 	platform_video_init();
@@ -1425,26 +1464,37 @@ int main(int argc, char *argv[]) {
 	platform_audio_init();
 
 	bool sd_mounted = dvmProbeMountDiscIface("sd", &__io_wiisd, 4, 64);
-	platform_log_init(sd_mounted);
+	platform_log_init(sd_mounted, app_dir);
 	platform_wii_io_init();
 	atexit(platform_audio_shutdown);
 	const char *data_root = NULL;
-	if (sd_mounted && platform_data_root_exists("sd:/apps/wiipeout/wipeout")) {
+	bool usb_mounted = false;
+	bool usb_tried = false;
+	static char app_data[300];
+	if (app_dir) {
+		bool on_sd = strncmp(app_dir, "sd:/", 4) == 0;
+		bool on_usb = strncmp(app_dir, "usb:/", 5) == 0;
+		if (on_usb) {
+			usb_mounted = platform_mount_usb();
+			usb_tried = true;
+		}
+		snprintf(app_data, sizeof(app_data), "%swipeout", app_dir);
+		if (((on_sd && sd_mounted) || (on_usb && usb_mounted)) && platform_data_root_exists(app_data)) {
+			data_root = app_dir;
+		}
+	}
+	if (!data_root && sd_mounted && platform_data_root_exists("sd:/apps/wiipeout/wipeout")) {
 		data_root = "sd:/apps/wiipeout/";
 	}
 #if !defined(PATH_ASSETS) || !defined(PATH_USERDATA)
 	if (!data_root) {
-		for (int i = 0; i < 20; i++) {
-			if (dvmProbeMountDiscIface("usb", &__io_usbstorage, 4, 64)) {
-				if (platform_data_root_exists("usb:/apps/wiipeout/wipeout")) {
-					data_root = "usb:/apps/wiipeout/";
-				}
-				break;
-			}
-			if (i < 19) usleep(150000);
+		if (!usb_tried) usb_mounted = platform_mount_usb();
+		if (usb_mounted && platform_data_root_exists("usb:/apps/wiipeout/wipeout")) {
+			data_root = "usb:/apps/wiipeout/";
 		}
 	}
 	if (!data_root) {
+		if (app_dir) printf("ERROR: Data directory not found: %swipeout\n", app_dir);
 		printf("ERROR: Data directory not found: sd:/apps/wiipeout/wipeout or usb:/apps/wiipeout/wipeout. Press HOME to exit.\n");
 		platform_wii_log_sync();
 		while (!wants_to_exit && !power_requested && !reset_requested) {

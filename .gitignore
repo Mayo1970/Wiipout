@@ -26,6 +26,7 @@
 /build/
 /build_*/
 /dist/
+/dist-debug/
 /sd/
 *.o
 *.d
@@ -52,11 +53,10 @@ gamecontrollerdb.txt
 
 # Sprint plan and board (local only)
 /plan/
+roadmap.md
 
 # AI tooling
 .claude/
 CLAUDE.md
-AGENTS.md
-AGENTS.MD
 .codex/
 .agents/
